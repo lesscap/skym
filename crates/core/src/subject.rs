@@ -17,6 +17,17 @@ pub struct WorkloadKey {
     pub service: String,
 }
 
+impl WorkloadKey {
+    /// Exactly the keys whose subject string parses back: the service may contain `/`,
+    /// the project may not.
+    pub fn is_valid(&self) -> bool {
+        valid_host(&self.host)
+            && !self.project.is_empty()
+            && !self.project.contains('/')
+            && !self.service.is_empty()
+    }
+}
+
 /// What an incident or event is about. Serialized as one canonical string:
 /// `host:<h>`, `workload:<h>/<project>/<service>`, `mount:<h>:<path>`, `endpoint:<url>`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -59,10 +70,8 @@ impl FromStr for Subject {
             "host" => valid_host(rest).then(|| Subject::Host(rest.to_string())),
             "workload" => parse_workload(rest).map(Subject::Workload),
             "mount" => rest.split_once(':').and_then(|(host, path)| {
-                (valid_host(host) && path.starts_with('/')).then(|| Subject::Mount {
-                    host: host.to_string(),
-                    path: path.to_string(),
-                })
+                (valid_host(host) && path.starts_with('/'))
+                    .then(|| Subject::Mount { host: host.to_string(), path: path.to_string() })
             }),
             "endpoint" => (!rest.is_empty()).then(|| Subject::Endpoint(rest.to_string())),
             _ => None,
@@ -78,11 +87,12 @@ fn valid_host(h: &str) -> bool {
 fn parse_workload(rest: &str) -> Option<WorkloadKey> {
     let mut parts = rest.splitn(3, '/');
     let (host, project, service) = (parts.next()?, parts.next()?, parts.next()?);
-    (valid_host(host) && !project.is_empty() && !service.is_empty()).then(|| WorkloadKey {
+    let key = WorkloadKey {
         host: host.to_string(),
         project: project.to_string(),
         service: service.to_string(),
-    })
+    };
+    key.is_valid().then_some(key)
 }
 
 impl Serialize for Subject {
@@ -93,9 +103,7 @@ impl Serialize for Subject {
 
 impl<'de> Deserialize<'de> for Subject {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(de::Error::custom)
+        String::deserialize(deserializer)?.parse().map_err(de::Error::custom)
     }
 }
 

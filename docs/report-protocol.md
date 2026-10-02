@@ -12,6 +12,7 @@ Content-Encoding: gzip
 ```
 
 - The server identifies the host from the token. The `host` field in the body is informational and ignored for identity.
+- A report with an invalid or duplicate workload key is rejected with `400` (see [workload identity](domain-model.md#workload-identity)).
 - The response only acknowledges receipt. It never carries instructions.
 - Default interval: 60 seconds.
 

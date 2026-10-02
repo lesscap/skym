@@ -6,6 +6,8 @@ use crate::time::Timestamp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+use std::fmt;
 
 /// The only message `skym agent` sends. Every report is also a heartbeat.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -42,39 +44,66 @@ pub fn facts_hash<T: Serialize>(facts: &T) -> String {
 
 /// Replaces every host reference with the identity the server derived from the token.
 pub fn rehost(report: Report, host: &str) -> Report {
-    let key = |k: WorkloadKey| WorkloadKey {
-        host: host.to_string(),
-        ..k
-    };
+    let key = |k: WorkloadKey| WorkloadKey { host: host.to_string(), ..k };
     Report {
         host: host.to_string(),
         workloads: report
             .workloads
             .into_iter()
-            .map(|w| WorkloadReport {
-                key: key(w.key),
-                ..w
-            })
+            .map(|w| WorkloadReport { key: key(w.key), ..w })
             .collect(),
         local_events: report
             .local_events
             .into_iter()
             .map(|e| match e {
-                LocalEvent::OomKilled { ts, workload } => LocalEvent::OomKilled {
-                    ts,
-                    workload: workload.map(key),
-                },
+                LocalEvent::OomKilled { ts, workload } => {
+                    LocalEvent::OomKilled { ts, workload: workload.map(key) }
+                }
                 other => other,
             })
             .collect(),
         exceptions: report
             .exceptions
             .into_iter()
-            .map(|g| ExceptionGroup {
-                workload: key(g.workload),
-                ..g
-            })
+            .map(|g| ExceptionGroup { workload: key(g.workload), ..g })
             .collect(),
         ..report
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReportError {
+    InvalidWorkloadKey(WorkloadKey),
+    DuplicateWorkloadKey(WorkloadKey),
+}
+
+impl fmt::Display for ReportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReportError::InvalidWorkloadKey(k) => write!(f, "invalid workload key {k:?}"),
+            ReportError::DuplicateWorkloadKey(k) => write!(f, "duplicate workload key {k:?}"),
+        }
+    }
+}
+
+impl std::error::Error for ReportError {}
+
+/// What `judge` and storage rely on: every workload key is valid, and each workload
+/// appears once. Call after [`rehost`]; the server rejects reports that fail.
+pub fn validate(report: &Report) -> Result<(), ReportError> {
+    let mut workload_keys = report.workloads.iter().map(|w| &w.key);
+    let event_keys = report.local_events.iter().filter_map(|e| match e {
+        LocalEvent::OomKilled { workload, .. } => workload.as_ref(),
+        LocalEvent::Unknown => None,
+    });
+    let exception_keys = report.exceptions.iter().map(|g| &g.workload);
+    let invalid =
+        workload_keys.clone().chain(event_keys).chain(exception_keys).find(|k| !k.is_valid());
+    let mut seen = BTreeSet::new();
+    let duplicate = workload_keys.find(|k| !seen.insert(*k));
+    match (invalid, duplicate) {
+        (Some(k), _) => Err(ReportError::InvalidWorkloadKey(k.clone())),
+        (None, Some(k)) => Err(ReportError::DuplicateWorkloadKey(k.clone())),
+        (None, None) => Ok(()),
     }
 }

@@ -8,7 +8,7 @@ use crate::model::{
 use crate::report::{Report, WorkloadReport};
 use crate::rules::{Finding, IncidentCode, Severity};
 use crate::subject::{Subject, WorkloadKey};
-use crate::time::{SignedDuration, Timestamp};
+use crate::time::SignedDuration;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// History the report alone does not carry, already filtered by the caller.
@@ -20,7 +20,8 @@ pub struct Recent<'a> {
 }
 
 pub struct JudgeInput<'a> {
-    /// Already rehosted. Its `ts` is the reference time for every window.
+    /// Rehosted and validated (see [`crate::report::validate`]).
+    /// Its `ts` is the reference time for every window.
     pub report: &'a Report,
     /// Known facts for workloads whose report omits them.
     pub facts: &'a BTreeMap<WorkloadKey, WorkloadFacts>,
@@ -28,130 +29,104 @@ pub struct JudgeInput<'a> {
     pub open: &'a BTreeSet<(Subject, IncidentCode)>,
 }
 
-type Hit = (IncidentCode, Severity, String);
+impl JudgeInput<'_> {
+    fn is_open(&self, subject: &Subject, code: IncidentCode) -> bool {
+        self.open.contains(&(subject.clone(), code))
+    }
+}
 
 /// At most one finding per `(subject, code)`.
 pub fn judge(input: &JudgeInput) -> Vec<Finding> {
     let report = input.report;
-    let workloads = report
-        .workloads
-        .iter()
-        .flat_map(|w| workload_findings(input, w));
-    let mounts = report
-        .host_state
-        .mounts
-        .iter()
-        .filter_map(|m| disk(input, m));
-    workloads
-        .chain(mounts)
-        .chain(oom(input))
-        .chain(app_exceptions(input))
-        .collect()
+    let workloads = report.workloads.iter().flat_map(|w| workload(input, w));
+    let mounts = report.host_state.mounts.iter().filter_map(|m| disk(input, m));
+    workloads.chain(mounts).chain(oom(input)).chain(app_exceptions(input)).collect()
 }
 
-fn workload_findings(input: &JudgeInput, w: &WorkloadReport) -> Vec<Finding> {
-    let subject = Subject::Workload(w.key.clone());
+fn workload(input: &JudgeInput, w: &WorkloadReport) -> Vec<Finding> {
+    let subject = &Subject::Workload(w.key.clone());
     let facts = w.facts.as_ref().or_else(|| input.facts.get(&w.key));
-    let is_open = |code| input.open.contains(&(subject.clone(), code));
-    let now = input.report.ts;
+    let state = &w.state;
     [
-        down(&w.state),
-        unhealthy(&w.state),
-        crash_loop(&w.state, now, is_open(IncidentCode::CrashLoop)),
-        log_unbounded(facts),
-        datastore_unreachable(&w.state),
-        replication_lag(&w.state, is_open(IncidentCode::ReplicationLag)),
+        down(subject, state),
+        unhealthy(subject, state),
+        crash_loop(subject, state, input),
+        log_unbounded(subject, facts),
+        datastore_unreachable(subject, state),
+        replication_lag(subject, state, input),
     ]
     .into_iter()
     .flatten()
-    .map(|(code, severity, detail)| Finding {
-        subject: subject.clone(),
-        code,
-        severity,
-        detail,
-    })
     .collect()
 }
 
-fn down(state: &WorkloadState) -> Option<Hit> {
-    let not_running = match state.run {
-        RunState::Running | RunState::Unknown => None,
-        RunState::Exited if state.exit_code == Some(0) => None,
-        RunState::Exited => Some(format!("exited ({})", state.exit_code.unwrap_or(-1))),
-        other => Some(format!("{other:?}").to_lowercase()),
+fn finding(subject: &Subject, code: IncidentCode, severity: Severity, detail: String) -> Finding {
+    Finding { subject: subject.clone(), code, severity, detail }
+}
+
+fn critical_if(critical: bool) -> Severity {
+    if critical { Severity::Critical } else { Severity::Warn }
+}
+
+fn down(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
+    let not_running = match (state.run, state.exit_code) {
+        (RunState::Running | RunState::Unknown, _) | (RunState::Exited, Some(0)) => None,
+        (RunState::Exited, Some(code)) => Some(format!("exited ({code})")),
+        (run, _) => Some(run.to_string()),
     };
     let not_listening = || {
         let ports: Vec<String> = state.missing_ports.iter().map(u16::to_string).collect();
         (!ports.is_empty()).then(|| format!("not listening on {}", ports.join(", ")))
     };
     let detail = not_running.or_else(not_listening)?;
-    Some((IncidentCode::WorkloadDown, Severity::Critical, detail))
+    Some(finding(subject, IncidentCode::WorkloadDown, Severity::Critical, detail))
 }
 
-fn unhealthy(state: &WorkloadState) -> Option<Hit> {
-    (state.health == Some(Health::Unhealthy)).then(|| {
-        (
-            IncidentCode::WorkloadUnhealthy,
-            Severity::Critical,
-            "healthcheck unhealthy".to_string(),
-        )
-    })
+fn unhealthy(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
+    let detail = "healthcheck unhealthy".to_string();
+    (state.health == Some(Health::Unhealthy))
+        .then(|| finding(subject, IncidentCode::WorkloadUnhealthy, Severity::Critical, detail))
 }
 
-fn crash_loop(state: &WorkloadState, now: Timestamp, open: bool) -> Option<Hit> {
-    let since = |window| state.restarts.iter().filter(|t| **t > now - window).count();
-    let last_hour = since(SignedDuration::from_hours(1));
-    let matched = if open {
-        since(SignedDuration::from_mins(30)) >= 1
+fn crash_loop(subject: &Subject, state: &WorkloadState, input: &JudgeInput) -> Option<Finding> {
+    let now = input.report.ts;
+    let within = |window| state.restarts.iter().filter(|t| **t > now - window).count();
+    let last_hour = within(SignedDuration::from_hours(1));
+    let matched = if input.is_open(subject, IncidentCode::CrashLoop) {
+        within(SignedDuration::from_mins(30)) >= 1
     } else {
         last_hour >= 3
     };
-    let severity = if last_hour >= 10 {
-        Severity::Critical
-    } else {
-        Severity::Warn
-    };
-    matched.then(|| {
-        (
-            IncidentCode::CrashLoop,
-            severity,
-            format!("{last_hour} restarts in the last hour"),
-        )
-    })
+    let detail = format!("{last_hour} restarts in the last hour");
+    matched.then(|| finding(subject, IncidentCode::CrashLoop, critical_if(last_hour >= 10), detail))
 }
 
-fn log_unbounded(facts: Option<&WorkloadFacts>) -> Option<Hit> {
+/// The `local` driver rotates by default; only `json-file` grows without a limit.
+fn log_unbounded(subject: &Subject, facts: Option<&WorkloadFacts>) -> Option<Finding> {
     let facts = facts?;
-    (facts.log_driver.as_deref() == Some("json-file") && facts.log_max_size.is_none()).then(|| {
-        let detail = "json-file log driver without max-size".to_string();
-        (IncidentCode::LogUnbounded, Severity::Warn, detail)
-    })
+    let unbounded =
+        facts.log_driver.as_deref() == Some("json-file") && facts.log_max_size.is_none();
+    let detail = "json-file log driver without max-size".to_string();
+    unbounded.then(|| finding(subject, IncidentCode::LogUnbounded, Severity::Warn, detail))
 }
 
-fn datastore_unreachable(state: &WorkloadState) -> Option<Hit> {
+fn datastore_unreachable(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
     let probe = state.datastore.as_ref().filter(|d| !d.reachable)?;
-    Some((
-        IncidentCode::DatastoreUnreachable,
-        Severity::Critical,
-        probe.detail.clone(),
-    ))
+    let code = IncidentCode::DatastoreUnreachable;
+    Some(finding(subject, code, Severity::Critical, probe.detail.clone()))
 }
 
-fn replication_lag(state: &WorkloadState, open: bool) -> Option<Hit> {
+fn replication_lag(
+    subject: &Subject,
+    state: &WorkloadState,
+    input: &JudgeInput,
+) -> Option<Finding> {
     let lag = state.datastore.as_ref()?.replication_lag_s?;
-    let matched = if open { lag >= 10.0 } else { lag > 30.0 };
-    let severity = if lag > 300.0 {
-        Severity::Critical
-    } else {
-        Severity::Warn
-    };
-    matched.then(|| {
-        (
-            IncidentCode::ReplicationLag,
-            severity,
-            format!("replication lag {lag:.0}s"),
-        )
-    })
+    let matched =
+        if input.is_open(subject, IncidentCode::ReplicationLag) { lag >= 10.0 } else { lag > 30.0 };
+    let detail = format!("replication lag {lag:.0}s");
+    matched
+        .then(|| finding(subject, IncidentCode::ReplicationLag, critical_if(lag > 300.0), detail))
 }
 
 fn disk(input: &JudgeInput, m: &MountState) -> Option<Finding> {
@@ -161,90 +136,84 @@ fn disk(input: &JudgeInput, m: &MountState) -> Option<Finding> {
         (ratio(m.inodes_used, m.inodes_total), "inodes used"),
     ]
     .into_iter()
-    .filter_map(|(r, what)| r.map(|r| (r, what)))
+    .filter_map(|(r, what)| Some((r?, what)))
     .max_by(|a, b| a.0.total_cmp(&b.0))?;
-    let subject = Subject::Mount {
-        host: input.report.host.clone(),
-        path: m.path.clone(),
-    };
-    let open = input
-        .open
-        .contains(&(subject.clone(), IncidentCode::DiskFilling));
-    let threshold = if open { 0.82 } else { 0.85 };
-    let severity = if p >= 0.92 {
-        Severity::Critical
-    } else {
-        Severity::Warn
-    };
-    (p >= threshold).then(|| Finding {
-        subject,
-        code: IncidentCode::DiskFilling,
-        severity,
-        detail: format!("{:.0}% {what}", p * 100.0),
-    })
+    let subject = &Subject::Mount { host: input.report.host.clone(), path: m.path.clone() };
+    let threshold = if input.is_open(subject, IncidentCode::DiskFilling) { 0.82 } else { 0.85 };
+    let detail = format!("{:.0}% {what}", p * 100.0);
+    (p >= threshold)
+        .then(|| finding(subject, IncidentCode::DiskFilling, critical_if(p >= 0.92), detail))
 }
 
 fn oom(input: &JudgeInput) -> Vec<Finding> {
     let host = &input.report.host;
-    let counts = input
-        .recent
-        .oom_events
-        .iter()
-        .filter_map(|e| match e {
-            LocalEvent::OomKilled {
-                workload: Some(k), ..
-            } => Some(Subject::Workload(k.clone())),
-            LocalEvent::OomKilled { workload: None, .. } => Some(Subject::Host(host.clone())),
-            LocalEvent::Unknown => None,
-        })
-        .fold(BTreeMap::<Subject, u32>::new(), |mut acc, s| {
+    let subject_of = |e: &LocalEvent| match e {
+        LocalEvent::OomKilled { workload: Some(k), .. } => Some(Subject::Workload(k.clone())),
+        LocalEvent::OomKilled { workload: None, .. } => Some(Subject::Host(host.clone())),
+        LocalEvent::Unknown => None,
+    };
+    let counts = input.recent.oom_events.iter().filter_map(subject_of).fold(
+        BTreeMap::<Subject, u32>::new(),
+        |mut acc, s| {
             *acc.entry(s).or_default() += 1;
             acc
-        });
+        },
+    );
     counts
         .into_iter()
-        .map(|(subject, n)| Finding {
-            subject,
-            code: IncidentCode::OomKilled,
-            severity: if n >= 3 {
-                Severity::Critical
-            } else {
-                Severity::Warn
-            },
-            detail: format!("{n} OOM kills in the last hour"),
+        .map(|(subject, n)| {
+            let detail = format!("{n} OOM kills in the last hour");
+            finding(&subject, IncidentCode::OomKilled, critical_if(n >= 3), detail)
         })
         .collect()
 }
 
-/// Per workload, application class only. Components starting with `_` are skym's own:
-/// `_stderr` is counted separately, other reserved components (protocol errors) never alarm.
+#[derive(Default)]
+struct ExceptionCounts {
+    gave_up: u32,
+    retrying: u32,
+    stderr: u32,
+}
+
+impl ExceptionCounts {
+    /// `_stderr` is the unstructured fallback. Protocol errors point at the application's
+    /// logging, not at a production failure, so they never alarm; `_OVERFLOW` does.
+    fn add(&mut self, g: &ExceptionGroup) {
+        if g.code == "_PROTOCOL_ERROR" {
+            return;
+        }
+        if g.component == "_stderr" {
+            self.stderr = self.stderr.saturating_add(g.count);
+        } else {
+            self.gave_up = self.gave_up.saturating_add(g.final_count);
+            self.retrying = self.retrying.saturating_add(g.count.saturating_sub(g.final_count));
+        }
+    }
+
+    fn alarming(&self) -> bool {
+        self.gave_up >= 5 || self.retrying >= 50 || self.stderr >= 10
+    }
+}
+
+/// Per workload, application class only.
 fn app_exceptions(input: &JudgeInput) -> Vec<Finding> {
-    let sums = input
-        .recent
-        .exceptions
-        .iter()
-        .filter(|g| g.class == ExceptionClass::Application)
-        .fold(BTreeMap::<WorkloadKey, [u32; 3]>::new(), |mut acc, g| {
-            let [f, r, s] = acc.entry(g.workload.clone()).or_default();
-            if g.component == "_stderr" {
-                *s += g.count;
-            } else if !g.component.starts_with('_') {
-                *f += g.final_count;
-                *r += g.count.saturating_sub(g.final_count);
-            }
+    let application =
+        input.recent.exceptions.iter().filter(|g| g.class == ExceptionClass::Application);
+    let per_workload =
+        application.fold(BTreeMap::<&WorkloadKey, ExceptionCounts>::new(), |mut acc, g| {
+            acc.entry(&g.workload).or_default().add(g);
             acc
         });
-    sums.into_iter()
-        .filter(|(_, [f, r, s])| *f >= 5 || *r >= 50 || *s >= 10)
-        .map(|(key, [f, r, s])| Finding {
-            subject: Subject::Workload(key),
-            code: IncidentCode::AppExceptions,
-            severity: if f >= 20 {
-                Severity::Critical
-            } else {
-                Severity::Warn
-            },
-            detail: format!("final {f}, retried {r}, stderr {s} in 15m"),
+    per_workload
+        .into_iter()
+        .filter(|(_, c)| c.alarming())
+        .map(|(key, c)| {
+            let detail = format!(
+                "gave up {}, retrying {}, stderr {} in 15m",
+                c.gave_up, c.retrying, c.stderr
+            );
+            let severity = critical_if(c.gave_up >= 20);
+            finding(&Subject::Workload(key.clone()), IncidentCode::AppExceptions, severity, detail)
         })
         .collect()
 }

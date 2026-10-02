@@ -6,6 +6,7 @@ use crate::time::Timestamp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct HostFacts {
@@ -109,6 +110,21 @@ pub enum RunState {
     Inactive,
     #[serde(other)]
     Unknown,
+}
+
+impl fmt::Display for RunState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            RunState::Running => "running",
+            RunState::Restarting => "restarting",
+            RunState::Paused => "paused",
+            RunState::Exited => "exited",
+            RunState::Dead => "dead",
+            RunState::Created => "created",
+            RunState::Inactive => "inactive",
+            RunState::Unknown => "unknown",
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]

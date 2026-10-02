@@ -72,6 +72,14 @@ endpoint:<url>                       endpoint:https://vocra.io
 
 A workload is the application a reader cares about, not a container instance. Container IDs change on every recreation; `(host, project, service)` does not. This keeps incidents, exceptions and deployments of the same application connected across redeploys.
 
+Scaled compose services keep one workload per replica: the first replica uses the service name, replica `n > 1` uses `<service>#<n>` (from `com.docker.compose.container-number`). Without scaling, keys are plain service names.
+
+```text
+valid(key) ⇔ host ≠ "" ∧ host has no "/" or ":" ∧ project ≠ "" ∧ project has no "/" ∧ service ≠ ""
+```
+
+Every key in a report must be valid and appear once among its workloads; the server rejects reports that break this.
+
 A container is a workload only if it is meant to stay up:
 
 ```text

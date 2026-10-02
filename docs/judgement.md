@@ -64,7 +64,7 @@ Notes:
 - **No memory percentage rule.** Linux uses free memory as cache, so high usage alone is not a problem; OOM kills are.
 - **`WORKLOAD_UNHEALTHY` decays to warn after 24 hours.** A container that stays unhealthy without business impact would otherwise hold a critical status forever and hide new problems. Other codes keep their severity while open.
 - **Disk projection** uses a linear fit over the last 6 hours of used space. With less than 6 hours of data, only the percentage applies.
-- `business` exception groups never open incidents; see the [exception protocol](exception-protocol.md).
+- `business` exception groups never open incidents; see the [exception protocol](exception-protocol.md). Neither do `_PROTOCOL_ERROR` groups: they point at the application's logging, not at a failure in production. `_OVERFLOW` groups count like any other application failure.
 - All values above are defaults defined in `crates/core`.
 
 ## Muting

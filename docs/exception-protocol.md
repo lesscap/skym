@@ -86,7 +86,7 @@ For each group and report interval, `skym` sends:
 | --- | --- |
 | More than 100 groups for one workload in one interval | Extra lines go to `code = "_OVERFLOW"` |
 | `skym` with a value this `skym` does not know (a line kind added later) | Ignored |
-| Marked line that is not valid JSON, misses a required field, or has an invalid `component` / `code` | Counted under `code = "_PROTOCOL_ERROR"` so the application owner sees it |
+| Marked line that is not valid JSON, misses a required field, or has an invalid `component` / `code` | Counted under `code = "_PROTOCOL_ERROR"` so the application owner sees it; it never opens an incident |
 
 ## Unmarked stderr lines
 

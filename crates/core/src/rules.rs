@@ -65,10 +65,5 @@ pub const fn rule(code: IncidentCode) -> Rule {
             (1, 1, None)
         }
     };
-    Rule {
-        code,
-        open_after,
-        resolve_after,
-        decay_to_warn_after,
-    }
+    Rule { code, open_after, resolve_after, decay_to_warn_after }
 }

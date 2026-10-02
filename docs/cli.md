@@ -74,7 +74,7 @@ The host configuration holds no host name and no customer: the server derives bo
 
 | Source | How workloads are found | Workload key |
 | --- | --- | --- |
-| `docker` | Discovered: containers with a restart policy or belonging to a compose service | `(host, compose project or "-", service or container name)` |
+| `docker` | Discovered: containers with a restart policy or belonging to a compose service | `(host, compose project or "-", service or container name)`; replica `n > 1` of a scaled service is `<service>#<n>` |
 | `systemd` | Declared in `[[systemd]]` | `(host, "_systemd", unit)` |
 
 Compose project names cannot be `-` or start with `_`, so keys never collide. Both sources produce the same workload model; judgement, incidents and the API do not depend on the source. A systemd unit that is active but not listening on a declared port is `WORKLOAD_DOWN`.

@@ -1,0 +1,2 @@
+# Error message wording is not behavior worth pinning down with tests.
+exclude_re = ["impl fmt::Display for (SubjectError|SinceError|ReportError)"]

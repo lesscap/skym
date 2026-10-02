@@ -75,10 +75,5 @@ pub struct HostView {
 
 /// Highest severity among unmuted incidents; `Ok` when there are none.
 pub fn rollup(incidents: &[IncidentView]) -> Status {
-    incidents
-        .iter()
-        .filter(|i| !i.muted)
-        .map(|i| i.severity)
-        .max()
-        .map_or(Status::Ok, Status::from)
+    incidents.iter().filter(|i| !i.muted).map(|i| i.severity).max().map_or(Status::Ok, Status::from)
 }

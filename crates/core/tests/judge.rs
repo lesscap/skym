@@ -16,10 +16,7 @@ const PG: usize = 1;
 const XRAY: usize = 2;
 
 fn base() -> Report {
-    let path = format!(
-        "{}/tests/fixtures/report-full.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = format!("{}/tests/fixtures/report-full.json", env!("CARGO_MANIFEST_DIR"));
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
@@ -35,23 +32,14 @@ fn run(report: &Report, ctx: &Ctx) -> Vec<(Subject, IncidentCode, Severity)> {
     let input = JudgeInput {
         report,
         facts: &facts,
-        recent: Recent {
-            oom_events: &ctx.oom,
-            exceptions: &ctx.exceptions,
-        },
+        recent: Recent { oom_events: &ctx.oom, exceptions: &ctx.exceptions },
         open: &ctx.open,
     };
-    judge(&input)
-        .into_iter()
-        .map(|f| (f.subject, f.code, f.severity))
-        .collect()
+    judge(&input).into_iter().map(|f| (f.subject, f.code, f.severity)).collect()
 }
 
 fn severity_of(report: &Report, ctx: &Ctx, code: IncidentCode) -> Option<Severity> {
-    run(report, ctx)
-        .into_iter()
-        .find(|(_, c, _)| *c == code)
-        .map(|(_, _, s)| s)
+    run(report, ctx).into_iter().find(|(_, c, _)| *c == code).map(|(_, _, s)| s)
 }
 
 fn key(i: usize) -> WorkloadKey {
@@ -63,10 +51,7 @@ fn ago(report: &Report, mins: i64) -> Timestamp {
 }
 
 fn open(subject: Subject, code: IncidentCode) -> Ctx {
-    Ctx {
-        open: BTreeSet::from([(subject, code)]),
-        ..Ctx::default()
-    }
+    Ctx { open: BTreeSet::from([(subject, code)]), ..Ctx::default() }
 }
 
 #[test]
@@ -83,20 +68,11 @@ fn workload_down() {
         r.workloads[i].state.missing_ports = missing;
         severity_of(&r, &Ctx::default(), IncidentCode::WorkloadDown)
     };
-    assert_eq!(
-        check(RunState::Exited, Some(1), vec![], APP),
-        Some(Severity::Critical)
-    );
-    assert_eq!(
-        check(RunState::Restarting, None, vec![], APP),
-        Some(Severity::Critical)
-    );
+    assert_eq!(check(RunState::Exited, Some(1), vec![], APP), Some(Severity::Critical));
+    assert_eq!(check(RunState::Restarting, None, vec![], APP), Some(Severity::Critical));
     assert_eq!(check(RunState::Exited, Some(0), vec![], APP), None);
     assert_eq!(check(RunState::Unknown, None, vec![], APP), None);
-    assert_eq!(
-        check(RunState::Running, None, vec![443], XRAY),
-        Some(Severity::Critical)
-    );
+    assert_eq!(check(RunState::Running, None, vec![443], XRAY), Some(Severity::Critical));
 }
 
 #[test]
@@ -108,45 +84,37 @@ fn crash_loop_with_hysteresis() {
     };
     let none = Ctx::default();
     let is_open = open(Subject::Workload(key(APP)), IncidentCode::CrashLoop);
-    assert_eq!(
-        severity_of(&with_restarts(&[1, 2]), &none, IncidentCode::CrashLoop),
-        None
-    );
-    let three = with_restarts(&[1, 2, 3]);
-    assert_eq!(
-        severity_of(&three, &none, IncidentCode::CrashLoop),
-        Some(Severity::Warn)
-    );
-    let ten = with_restarts(&[1; 10]);
-    assert_eq!(
-        severity_of(&ten, &none, IncidentCode::CrashLoop),
-        Some(Severity::Critical)
-    );
-    let one_recent = with_restarts(&[20]);
-    assert_eq!(
-        severity_of(&one_recent, &is_open, IncidentCode::CrashLoop),
-        Some(Severity::Warn)
-    );
-    let one_old = with_restarts(&[40]);
-    assert_eq!(
-        severity_of(&one_old, &is_open, IncidentCode::CrashLoop),
-        None
-    );
+    let cases: [(&[i64], &Ctx, Option<Severity>); 7] = [
+        (&[1, 2], &none, None),
+        (&[1, 2, 60], &none, None), // exactly one hour ago is outside the window
+        (&[1, 2, 59], &none, Some(Severity::Warn)),
+        (&[1; 9], &none, Some(Severity::Warn)),
+        (&[1; 10], &none, Some(Severity::Critical)),
+        (&[29], &is_open, Some(Severity::Warn)),
+        (&[30], &is_open, None),
+    ];
+    for (mins, ctx, expected) in cases {
+        assert_eq!(
+            severity_of(&with_restarts(mins), ctx, IncidentCode::CrashLoop),
+            expected,
+            "{mins:?}"
+        );
+    }
 }
 
 #[test]
 fn oom_kills_are_grouped_per_subject() {
     let r = base();
-    let event = |workload| LocalEvent::OomKilled {
-        ts: ago(&r, 5),
-        workload,
-    };
+    let event = |workload| LocalEvent::OomKilled { ts: ago(&r, 5), workload };
     let ctx = Ctx {
         oom: vec![
             event(Some(key(APP))),
             event(Some(key(APP))),
             event(Some(key(APP))),
+            event(Some(key(PG))),
+            event(Some(key(PG))),
             event(None),
+            LocalEvent::Unknown,
         ],
         ..Ctx::default()
     };
@@ -156,12 +124,9 @@ fn oom_kills_are_grouped_per_subject() {
         IncidentCode::OomKilled,
         Severity::Critical
     )));
-    assert!(found.contains(&(
-        Subject::Host("x".into()),
-        IncidentCode::OomKilled,
-        Severity::Warn
-    )));
-    assert_eq!(found.len(), 2);
+    assert!(found.contains(&(Subject::Workload(key(PG)), IncidentCode::OomKilled, Severity::Warn)));
+    assert!(found.contains(&(Subject::Host("x".into()), IncidentCode::OomKilled, Severity::Warn)));
+    assert_eq!(found.len(), 3);
 }
 
 #[test]
@@ -174,18 +139,23 @@ fn disk_filling_with_hysteresis_and_inodes() {
         r
     };
     let none = Ctx::default();
-    let mount = Subject::Mount {
-        host: "x".into(),
-        path: "/".into(),
-    };
+    let mount = Subject::Mount { host: "x".into(), path: "/".into() };
     let is_open = open(mount, IncidentCode::DiskFilling);
     let disk = |r: &Report, ctx: &Ctx| severity_of(r, ctx, IncidentCode::DiskFilling);
-    assert_eq!(disk(&with(86, 0, 10), &none), Some(Severity::Warn));
-    assert_eq!(disk(&with(84, 0, 10), &none), None);
-    assert_eq!(disk(&with(84, 0, 10), &is_open), Some(Severity::Warn));
-    assert_eq!(disk(&with(93, 0, 10), &none), Some(Severity::Critical));
-    assert_eq!(disk(&with(10, 9, 10), &none), Some(Severity::Warn));
-    assert_eq!(disk(&with(10, 0, 0), &none), None);
+    let cases = [
+        (with(84, 0, 10), &none, None),
+        (with(85, 0, 10), &none, Some(Severity::Warn)),
+        (with(91, 0, 10), &none, Some(Severity::Warn)),
+        (with(92, 0, 10), &none, Some(Severity::Critical)),
+        (with(82, 0, 10), &is_open, Some(Severity::Warn)),
+        (with(81, 0, 10), &is_open, None),
+        (with(10, 9, 10), &none, Some(Severity::Warn)), // inodes alone
+        (with(10, 0, 0), &none, None),
+        (with(10, 5, 0), &none, None), // no inode accounting
+    ];
+    for (i, (report, ctx, expected)) in cases.iter().enumerate() {
+        assert_eq!(disk(report, ctx), *expected, "case {i}");
+    }
 }
 
 #[test]
@@ -198,34 +168,20 @@ fn log_unbounded_uses_known_facts_when_omitted() {
     let input = JudgeInput {
         report: &r,
         facts: &known,
-        recent: Recent {
-            oom_events: &ctx.oom,
-            exceptions: &ctx.exceptions,
-        },
+        recent: Recent { oom_events: &ctx.oom, exceptions: &ctx.exceptions },
         open: &ctx.open,
     };
-    assert!(
-        judge(&input)
-            .iter()
-            .any(|f| f.code == IncidentCode::LogUnbounded)
-    );
+    assert!(judge(&input).iter().any(|f| f.code == IncidentCode::LogUnbounded));
     // the postgres workload uses the `local` driver without max-size: rotated by default
-    assert!(
-        !judge(&input)
-            .iter()
-            .any(|f| f.subject == Subject::Workload(key(PG)))
-    );
+    assert!(!judge(&input).iter().any(|f| f.subject == Subject::Workload(key(PG))));
 }
 
 #[test]
 fn datastore_reachability_and_replication_lag() {
     let with = |reachable, lag| {
         let mut r = base();
-        r.workloads[PG].state.datastore = Some(DatastoreProbe {
-            reachable,
-            detail: "x".into(),
-            replication_lag_s: Some(lag),
-        });
+        r.workloads[PG].state.datastore =
+            Some(DatastoreProbe { reachable, detail: "x".into(), replication_lag_s: Some(lag) });
         r
     };
     let none = Ctx::default();
@@ -233,10 +189,17 @@ fn datastore_reachability_and_replication_lag() {
     let lag = |r: &Report, ctx: &Ctx| severity_of(r, ctx, IncidentCode::ReplicationLag);
     let down = severity_of(&with(false, 0.0), &none, IncidentCode::DatastoreUnreachable);
     assert_eq!(down, Some(Severity::Critical));
-    assert_eq!(lag(&with(true, 35.0), &none), Some(Severity::Warn));
-    assert_eq!(lag(&with(true, 15.0), &none), None);
-    assert_eq!(lag(&with(true, 15.0), &is_open), Some(Severity::Warn));
-    assert_eq!(lag(&with(true, 400.0), &none), Some(Severity::Critical));
+    let cases = [
+        (30.0, &none, None),
+        (30.5, &none, Some(Severity::Warn)),
+        (300.0, &none, Some(Severity::Warn)),
+        (300.5, &none, Some(Severity::Critical)),
+        (10.0, &is_open, Some(Severity::Warn)),
+        (9.9, &is_open, None),
+    ];
+    for (seconds, ctx, expected) in cases {
+        assert_eq!(lag(&with(true, seconds), ctx), expected, "{seconds}s");
+    }
 }
 
 #[test]
@@ -255,33 +218,31 @@ fn app_exceptions_thresholds() {
         sample: None,
     };
     let check = |groups: Vec<ExceptionGroup>| {
-        severity_of(
-            &r,
-            &Ctx {
-                exceptions: groups,
-                ..Ctx::default()
-            },
-            IncidentCode::AppExceptions,
-        )
+        severity_of(&r, &Ctx { exceptions: groups, ..Ctx::default() }, IncidentCode::AppExceptions)
     };
     let app = ExceptionClass::Application;
-    let split = vec![group(app, "a", 3, 3), group(app, "b", 2, 2)];
-    assert_eq!(check(split), Some(Severity::Warn));
-    assert_eq!(check(vec![group(app, "a", 4, 4)]), None);
-    assert_eq!(check(vec![group(app, "a", 50, 0)]), Some(Severity::Warn));
-    assert_eq!(
-        check(vec![group(app, "_stderr", 10, 10)]),
-        Some(Severity::Warn)
-    );
-    assert_eq!(
-        check(vec![group(app, "a", 20, 20)]),
-        Some(Severity::Critical)
-    );
-    assert_eq!(
-        check(vec![group(ExceptionClass::Business, "a", 99, 99)]),
-        None
-    );
-    assert_eq!(check(vec![group(app, "_skym", 99, 99)]), None);
+    let cases = [
+        (vec![group(app, "a", 3, 3), group(app, "b", 2, 2)], Some(Severity::Warn)), // summed
+        (vec![group(app, "a", 4, 4)], None),
+        (vec![group(app, "a", 49, 0)], None),
+        (vec![group(app, "a", 50, 0)], Some(Severity::Warn)),
+        (vec![group(app, "_stderr", 9, 9)], None),
+        (vec![group(app, "_stderr", 10, 10)], Some(Severity::Warn)),
+        (vec![group(app, "a", 19, 19)], Some(Severity::Warn)),
+        (vec![group(app, "a", 20, 20)], Some(Severity::Critical)),
+        (vec![group(ExceptionClass::Business, "a", 99, 99)], None),
+        (
+            vec![ExceptionGroup { code: "_PROTOCOL_ERROR".into(), ..group(app, "_skym", 99, 99) }],
+            None,
+        ), // protocol errors never alarm
+        (
+            vec![ExceptionGroup { code: "_OVERFLOW".into(), ..group(app, "_skym", 5, 5) }],
+            Some(Severity::Warn),
+        ),
+    ];
+    for (i, (groups, expected)) in cases.into_iter().enumerate() {
+        assert_eq!(check(groups), expected, "case {i}");
+    }
 }
 
 #[test]
@@ -310,4 +271,31 @@ fn rollup_ignores_muted_and_takes_the_worst() {
     assert_eq!(rollup(&[view(Severity::Critical, true)]), Status::Ok);
     let mixed = [view(Severity::Warn, false), view(Severity::Critical, false)];
     assert_eq!(rollup(&mixed), Status::Critical);
+}
+
+#[test]
+fn at_most_one_finding_per_subject_and_code() {
+    let mut r = base();
+    let recent = ago(&r, 1);
+    for w in &mut r.workloads {
+        w.state.run = RunState::Dead;
+        w.state.health = Some(Health::Unhealthy);
+        w.state.restarts = vec![recent; 20];
+        w.state.missing_ports = vec![443];
+        w.state.datastore = Some(DatastoreProbe {
+            reachable: false,
+            detail: "x".into(),
+            replication_lag_s: Some(900.0),
+        });
+        if let Some(f) = w.facts.as_mut() {
+            (f.log_driver, f.log_max_size) = (Some("json-file".into()), None);
+        }
+    }
+    let m = &mut r.host_state.mounts[0];
+    (m.used_bytes, m.inodes_used) = (m.total_bytes, m.inodes_total);
+    let found = run(&r, &Ctx::default());
+    let unique: BTreeSet<_> = found.iter().map(|(s, c, _)| (s.clone(), *c)).collect();
+    assert_eq!(unique.len(), found.len());
+    // 3 workloads × 6 workload rules + 1 mount
+    assert_eq!(found.len(), 19);
 }
