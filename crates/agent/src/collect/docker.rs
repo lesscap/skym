@@ -2,6 +2,7 @@
 //! Every call has a deadline: bollard's own timeout does not cover reading a response body.
 
 use super::containers::working_set;
+use super::split;
 use anyhow::{Context, anyhow};
 use bollard::errors::Error;
 use bollard::models::{ContainerInspectResponse, EventMessage};
@@ -75,13 +76,8 @@ pub async fn inspect_all(
         .buffer_unordered(8)
         .collect()
         .await;
-    Ok(results.into_iter().fold((Vec::new(), Vec::new()), |(mut ok, mut errors), r| {
-        match r {
-            Ok(i) => ok.extend(i),
-            Err(e) => errors.push(format!("{e:#}")),
-        }
-        (ok, errors)
-    }))
+    let (inspected, errors) = split(results.into_iter().map(|r| r.map_err(|e| format!("{e:#}"))));
+    Ok((inspected.into_iter().flatten().collect(), errors))
 }
 
 /// Container lifecycle events Docker still has in memory (it keeps only the last 256).

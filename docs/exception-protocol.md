@@ -42,7 +42,7 @@ The whole record must be on one line. Newlines inside values are escaped as JSON
 | `final` | optional | `true` when the failure will not be retried. Defaults to `true`: a failure without retry is final. |
 | `exception.type` | optional | Exception class name (OpenTelemetry semantic convention). |
 | `exception.message` | optional | Exception message (OpenTelemetry). |
-| `exception.stacktrace` | optional | Stack trace (OpenTelemetry). Truncated to 8 KB. |
+| `exception.stacktrace` | optional | Stack trace (OpenTelemetry). Truncated to 8192 characters in reports. |
 
 Not needed in the line: a timestamp (Docker records one per line), a log level (`class` carries the meaning), host or service names (`skym` knows the container).
 

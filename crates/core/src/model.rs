@@ -142,7 +142,7 @@ pub struct WorkloadState {
     pub run: RunState,
     pub exit_code: Option<i64>,
     pub health: Option<Health>,
-    /// Crash restarts within the last hour, at most 100.
+    /// Crash restarts within the last hour.
     #[serde(default)]
     pub restarts: Vec<Timestamp>,
     pub memory_used_bytes: Option<u64>,

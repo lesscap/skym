@@ -2,14 +2,15 @@
 
 use crate::config::{Mute, ServerConfig};
 use crate::lifecycle::{Change, Incident, State};
+use crate::store::hosts::{HostRow, WorkloadRow};
 use crate::store::incidents::LogEntry;
 use jiff::Timestamp;
-use skym_core::model::Event;
-use skym_core::subject::{HostId, Subject};
+use skym_core::model::{Event, ExceptionGroup};
+use skym_core::subject::{CustomerId, HostId, Subject};
 use skym_core::time::format_duration;
 use skym_core::view::{
-    CustomerOverview, HostOverview, IncidentView, Overview, Status, Timeline, TimelineEntry,
-    TimelineKind, rollup,
+    CustomerOverview, HostOverview, HostView, IncidentView, Overview, Status, Timeline,
+    TimelineEntry, TimelineKind, WorkloadView, rollup, workload_summary,
 };
 use std::collections::BTreeMap;
 
@@ -72,22 +73,57 @@ pub fn encode(segment: &str) -> String {
         .collect()
 }
 
-/// A host that never reported is unknown, and as urgent as a critical one.
+/// A host that never reported is unknown.
 pub fn host_status(incidents: &[IncidentView], reported: bool) -> Status {
     if reported { rollup(incidents) } else { Status::Unknown }
 }
 
-fn urgency(s: Status) -> u8 {
-    match s {
-        Status::Critical => 3,
-        Status::Unknown => 2,
-        Status::Warn => 1,
-        Status::Ok => 0,
+/// One host as stored; `row` is `None` until it first reports.
+pub fn host(
+    id: HostId,
+    customer: Option<CustomerId>,
+    row: Option<HostRow>,
+    workloads: Vec<WorkloadRow>,
+    incidents: Vec<IncidentView>,
+    now: Timestamp,
+) -> HostView {
+    let workloads = workloads
+        .into_iter()
+        .map(|w| {
+            let links = links(&Subject::Workload(w.key.clone()));
+            workload_summary(w.key, w.facts.as_ref(), w.state.run, &incidents, links)
+        })
+        .collect();
+    HostView {
+        status: host_status(&incidents, row.is_some()),
+        last_report_ago: row.as_ref().map(|r| format_duration(now.duration_since(r.last_seen))),
+        facts: row.as_ref().and_then(|r| r.facts.clone()),
+        errors: row.as_ref().map(|r| r.errors.clone()).unwrap_or_default(),
+        state: row.map(|r| r.state),
+        id,
+        customer,
+        workloads,
+        incidents,
     }
 }
 
-fn worst(statuses: impl Iterator<Item = Status>) -> Status {
-    statuses.max_by_key(|s| urgency(*s)).unwrap_or(Status::Ok)
+/// One workload with its own incidents, recent exceptions and events.
+pub fn workload(
+    row: WorkloadRow,
+    incidents: Vec<IncidentView>,
+    exceptions: Vec<ExceptionGroup>,
+    events: Vec<Event>,
+) -> WorkloadView {
+    WorkloadView {
+        status: rollup(&incidents),
+        links: links(&Subject::Workload(row.key.clone())),
+        key: row.key,
+        facts: row.facts,
+        state: row.state,
+        incidents,
+        exceptions,
+        events,
+    }
 }
 
 /// Customers in configuration order; within each, the most urgent hosts first.
@@ -119,20 +155,18 @@ pub fn overview(
                     }
                 })
                 .collect();
-            hosts.sort_by(|a, b| {
-                urgency(b.status).cmp(&urgency(a.status)).then_with(|| a.id.cmp(&b.id))
-            });
+            hosts.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.id.cmp(&b.id)));
             CustomerOverview {
                 id: c.id.clone(),
                 name: c.name.clone(),
-                status: worst(hosts.iter().map(|h| h.status)),
+                status: hosts.iter().map(|h| h.status).max().unwrap_or(Status::Ok),
                 hosts,
             }
         })
         .collect();
     Overview {
         ts: now,
-        status: worst(customers.iter().map(|c| c.status)),
+        status: customers.iter().map(|c| c.status).max().unwrap_or(Status::Ok),
         muted_count: open.iter().filter(|i| i.muted).count() as u32,
         customers,
     }

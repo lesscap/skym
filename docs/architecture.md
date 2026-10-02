@@ -6,9 +6,9 @@
 every host                                  your own machine
 ┌────────────────────────────┐              ┌──────────────────────────────┐
 │ skym                       │   HTTPS POST │ skym-server                  │
-│  skym status / check ...   │  /api/report │  ingest reports (per-host    │
+│  skym status / exceptions  │  /api/report │  ingest reports (per-host    │
 │   (CLI for humans/agents)  │ ───────────▶ │   token)                     │
-│  skym agent                │  every 60s   │  SQLite store                │
+│  skym agent (planned)      │  every 60s   │  SQLite store                │
 │   (collect + report)       │              │  heartbeat timeout detection │
 └────────────────────────────┘              │  query API                   │
                                             └──────────────▲───────────────┘
@@ -18,9 +18,9 @@ every host                                  your own machine
 
 | Component | Runs on | Role |
 | --- | --- | --- |
-| `skym` | every monitored host | One binary. As a CLI it answers "how is this host right now" locally. As `skym agent` it collects on a fixed interval and pushes a report. |
+| `skym` | every monitored host | One binary. As a CLI it answers "how is this host right now" locally. As `skym agent` (planned) it collects on a fixed interval and pushes a report. |
 | `skym-server` | a machine you control | Receives reports, stores the latest state, derives events and incidents, detects lost heartbeats, serves the query API. |
-| skill | the agent's side | A document that tells an AI agent how to call the API and read the results. |
+| skill (planned) | the agent's side | A document that tells an AI agent how to call the API and read the results. |
 | UI | served by `skym-server` (later) | A read-only view over the same API. It contains no logic of its own. |
 
 ## Principles
@@ -43,7 +43,7 @@ a meaning has to change ⇒ introduce a new name; keep the old one while produce
 consumers ignore unknown fields and map unknown enum values to Unknown instead of failing
 ```
 
-In Rust: no `deny_unknown_fields`, `#[serde(default)]` on fields added later, `#[serde(other)] Unknown` on enums.
+In Rust: no `deny_unknown_fields`, `#[serde(default)]` on non-`Option` fields added later (a missing `Option` is already `None`), `#[serde(other)] Unknown` on enums.
 
 ## Security model
 
@@ -53,7 +53,7 @@ In Rust: no `deny_unknown_fields`, `#[serde(default)]` on fields added later, `#
 - **No command channel.** Server responses only acknowledge receipt. The server cannot make `skym` run anything, change configuration or fetch extra data. Upgrades are pulled or installed by the host owner.
 - **Per-host tokens.** Each host has its own token, which can only write reports for that host. The server derives the host identity from the token and ignores any host name in the payload.
 - **Credentials stay on the host.** Probes that need credentials (for example, connecting to a database found in a container) read them and run locally; only the result is reported.
-- **Data minimization.** Container environment variables are never reported. Only whitelisted labels (`com.docker.compose.*`) are reported. Public IP addresses are not reported unless enabled. Exception messages are truncated and filtered for common secret patterns before leaving the host.
+- **Data minimization.** Container environment variables are never reported. Only whitelisted labels (`com.docker.compose.*`) are reported. Public IP addresses are not reported. Exception messages are truncated and filtered for common secret patterns before leaving the host.
 - **Read-only checks.** `skym` runs as a dedicated user and only reads. It never runs `docker exec` or anything else inside containers. Note that access to the Docker socket is effectively root access; host owners who do not accept that can disable container checks.
 - **Single operator.** skym is run by one team for all the hosts it looks after. Hosts are grouped by customer, but customers have no access to skym. Every reader token sees everything; each person or agent gets its own token so access can be told apart and revoked.
 
@@ -63,8 +63,9 @@ In Rust: no `deny_unknown_fields`, `#[serde(default)]` on fields added later, `#
 | --- | --- |
 | A host goes down or loses network | Its heartbeat stops; the server opens `HEARTBEAT_LOST`. |
 | `skym` crashes on a host | Same as above. |
-| `skym-server` is down | Hosts keep checking locally and buffer reports; buffered reports are replayed in order when the server is back. The server deduplicates by `(host, ts)`. |
-| All hosts go silent at once | Reported as a single incident pointing at the server side or the network, not one incident per host. |
+| `skym-server` is down | Hosts keep checking locally and buffer reports; buffered reports are replayed in order when the server is back (planned with `skym agent`). A report no newer than the last one stored only counts as a heartbeat. |
+| `skym-server` restarts | Lost heartbeats are counted from the later of the last report and the server start, so a restart opens none by itself. |
+| All hosts go silent at once | Each host opens its own `HEARTBEAT_LOST`; when at least 80% of the hosts that have reported (and at least 2) are silent, every one's detail starts with "all hosts silent", pointing at the server side or the network. |
 | The server host itself dies | Planned: the server pings an external dead man's switch (healthchecks.io); missing pings alert through that service. |
 
 ## Application signals

@@ -1,5 +1,6 @@
 //! Host facts and state from `/proc`, `/etc/os-release` and `statvfs`.
 
+use super::split;
 use anyhow::Context;
 use jiff::Timestamp;
 use skym_core::model::{HostFacts, HostState, MountFacts, MountState, TransientCounts};
@@ -37,16 +38,8 @@ pub fn read(
         mounts: mounts.clone(),
         public_ip: None,
     };
-    let (mounts, errors) = mounts.iter().map(|m| statvfs(&m.path)).fold(
-        (Vec::new(), Vec::new()),
-        |(mut sizes, mut errors), r| {
-            match r {
-                Ok(size) => sizes.push(size),
-                Err(e) => errors.push(format!("host: {e:#}")),
-            }
-            (sizes, errors)
-        },
-    );
+    let (mounts, errors) =
+        split(mounts.iter().map(|m| statvfs(&m.path).map_err(|e| format!("host: {e:#}"))));
     let state = HostState {
         load_1m,
         load_5m,

@@ -2,8 +2,7 @@ use super::*;
 use skym_core::model::RunState;
 
 fn report() -> Report {
-    let path = format!("{}/../core/tests/fixtures/report-full.json", env!("CARGO_MANIFEST_DIR"));
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    skym_core::fixtures::full_report()
 }
 
 fn stored_by(r: &Report, agent: &str) -> BTreeMap<WorkloadKey, Stored> {

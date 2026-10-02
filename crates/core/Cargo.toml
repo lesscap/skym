@@ -14,5 +14,9 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 
+[features]
+# The sample report other crates' tests start from.
+fixtures = []
+
 [lints]
 workspace = true

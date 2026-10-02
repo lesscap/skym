@@ -29,7 +29,7 @@ name = "ops-agent"
 token_sha256 = "…"
 ```
 
-`skym-server token` prints a new random token and the hash to configure. The server stores only token hashes and logs the reader `name` with each request. Host tokens can only call `POST /api/report`, and reader tokens cannot report.
+`skym-server token` prints a new random token and the hash to configure. The server stores only token hashes. It logs the reader `name` and path of each request at `debug` level (`RUST_LOG=skym_server=debug`). Host tokens can only call `POST /api/report`, and reader tokens cannot report.
 
 ## Endpoints
 
@@ -54,11 +54,11 @@ token_sha256 = "…"
 | `incidents` | `status` (`open` \| `resolved`, default `open`), `host`, `code`, `since`, `include_muted` (default `false`), `limit` |
 | `exceptions` | `host` (required), `workload`, `class` (`application` \| `business`), `since` (default `1h`), `limit` |
 
-`since` takes a duration (`15m`, `6h`, `7d`) or an RFC 3339 timestamp; for resolved incidents it defaults to `24h`. `limit` defaults to 100, at most 1000.
+`since` takes a duration (`15m`, `6h`, `7d`) or an RFC 3339 timestamp. For `incidents` it applies to resolved ones only (default `24h`); open incidents are listed whatever their age. `limit` defaults to 100, at most 1000.
 
 ### Status
 
-`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Hosts are listed by urgency: critical, then unknown, then warn, then ok. Muted incidents are listed only with `include_muted=true` and never count towards a status.
+`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Hosts are listed by urgency: critical, then unknown, then warn, then ok. Muted incidents never count towards a status. `incidents` lists them only with `include_muted=true`; host and workload views include them with `muted: true`; the overview leaves them out and counts them in `muted_count`.
 
 ### Lists and timeline
 
@@ -121,6 +121,8 @@ token_sha256 = "…"
 | 401 | `unauthorized` |
 | 404 | `not_found` |
 | 500 | `internal` |
+
+Two responses do not use this shape yet: unknown paths (404) and report bodies over the size limit (413) answer with plain text.
 
 ## Compatibility
 

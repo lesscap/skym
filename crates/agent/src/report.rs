@@ -42,9 +42,7 @@ mod tests {
     use skym_core::report::validate;
 
     fn collected() -> Collected {
-        let path =
-            format!("{}/../core/tests/fixtures/report-full.json", env!("CARGO_MANIFEST_DIR"));
-        let r: Report = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let r: Report = skym_core::fixtures::full_report();
         Collected {
             host: Some((r.host_facts.clone().unwrap(), r.host_state.clone())),
             workloads: r

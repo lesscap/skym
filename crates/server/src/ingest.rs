@@ -46,15 +46,15 @@ pub fn ingest(
     body: &[u8],
     now: Timestamp,
 ) -> Result<Outcome, IngestError> {
-    let invalid = |e: String| IngestError::Invalid(e);
-    let report: Report =
-        serde_json::from_slice(body).map_err(|e| invalid(format!("not a report: {e}")))?;
+    let report: Report = serde_json::from_slice(body)
+        .map_err(|e| IngestError::Invalid(format!("not a report: {e}")))?;
     // Stored times have whole seconds; compare and judge at the same precision.
-    let ts = Timestamp::from_second(report.ts.as_second()).map_err(|e| invalid(e.to_string()))?;
+    let ts = Timestamp::from_second(report.ts.as_second())
+        .map_err(|e| IngestError::Invalid(e.to_string()))?;
     let report = Report { ts, ..rehost(report, host) };
-    validate(&report).map_err(|e| invalid(e.to_string()))?;
+    validate(&report).map_err(|e| IngestError::Invalid(e.to_string()))?;
     if report.ts > now + MAX_AHEAD || report.ts < now - MAX_AGE {
-        return Err(invalid(
+        return Err(IngestError::Invalid(
             "report time is more than 10 minutes ahead or 7 days behind the server".into(),
         ));
     }

@@ -1,7 +1,6 @@
 //! Incident rows and their change log.
 
-use super::parsed;
-use crate::db::{parse_ts, ts};
+use super::{parsed, ts};
 use crate::lifecycle::{Change, Incident, Transition};
 use jiff::Timestamp;
 use rusqlite::{Connection, params};
@@ -13,10 +12,6 @@ const FIELDS: &str = "host, subject, code, state, severity, peak_severity, detai
                       clear_streak, first_match_at, opened_at, last_seen, resolved_at";
 
 const PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13";
-
-fn optional_ts(s: Option<String>) -> rusqlite::Result<Option<Timestamp>> {
-    s.as_deref().map(parse_ts).transpose()
-}
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<Incident> {
     Ok(Incident {
@@ -30,10 +25,10 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<Incident> {
         detail: r.get(7)?,
         match_streak: r.get(8)?,
         clear_streak: r.get(9)?,
-        first_match_at: parse_ts(&r.get::<_, String>(10)?)?,
-        opened_at: optional_ts(r.get(11)?)?,
-        last_seen: parse_ts(&r.get::<_, String>(12)?)?,
-        resolved_at: optional_ts(r.get(13)?)?,
+        first_match_at: parsed(r.get(10)?)?,
+        opened_at: r.get::<_, Option<String>>(11)?.map(parsed).transpose()?,
+        last_seen: parsed(r.get(12)?)?,
+        resolved_at: r.get::<_, Option<String>>(13)?.map(parsed).transpose()?,
     })
 }
 
@@ -169,7 +164,7 @@ pub fn changes(
         params![host, subject.map(Subject::to_string), ts(since), limit as i64],
         |r| {
             Ok(LogEntry {
-                ts: parse_ts(&r.get::<_, String>(0)?)?,
+                ts: parsed(r.get(0)?)?,
                 subject: parsed(r.get(1)?)?,
                 code: parsed(r.get(2)?)?,
                 change: parsed(r.get(3)?)?,

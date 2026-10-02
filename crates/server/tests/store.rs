@@ -20,8 +20,7 @@ fn mins(m: i64) -> SignedDuration {
 }
 
 fn report(ts: Timestamp) -> Report {
-    let path = format!("{}/../core/tests/fixtures/report-full.json", env!("CARGO_MANIFEST_DIR"));
-    let mut r: Report = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut r: Report = skym_core::fixtures::full_report();
     r.ts = ts;
     r.exceptions.clear();
     r

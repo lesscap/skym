@@ -8,7 +8,7 @@ use skym_core::report::Report;
 use skym_core::rules::{IncidentCode, Severity};
 use skym_core::subject::{Subject, WorkloadKey};
 use skym_core::time::{SignedDuration, Timestamp};
-use skym_core::view::{IncidentView, Status, rollup};
+use skym_core::view::{IncidentView, Status, rollup, workload_summary};
 use std::collections::{BTreeMap, BTreeSet};
 
 const APP: usize = 0;
@@ -253,10 +253,9 @@ fn unhealthy_workload() {
     assert_eq!(found, Some(Severity::Critical));
 }
 
-#[test]
-fn rollup_ignores_muted_and_takes_the_worst() {
-    let view = |severity, muted| IncidentView {
-        subject: Subject::Host("x".into()),
+fn incident(subject: Subject, severity: Severity, muted: bool) -> IncidentView {
+    IncidentView {
+        subject,
         code: IncidentCode::DiskFilling,
         severity,
         detail: String::new(),
@@ -266,11 +265,33 @@ fn rollup_ignores_muted_and_takes_the_worst() {
         muted,
         mute_reason: None,
         links: BTreeMap::new(),
-    };
+    }
+}
+
+#[test]
+fn rollup_ignores_muted_and_takes_the_worst() {
+    let view = |severity, muted| incident(Subject::Host("x".into()), severity, muted);
     assert_eq!(rollup(&[]), Status::Ok);
     assert_eq!(rollup(&[view(Severity::Critical, true)]), Status::Ok);
     let mixed = [view(Severity::Warn, false), view(Severity::Critical, false)];
     assert_eq!(rollup(&mixed), Status::Critical);
+}
+
+#[test]
+fn a_workload_summary_counts_only_its_own_incidents() {
+    let r = base();
+    let key = |i: usize| r.workloads[i].key.clone();
+    let incidents = [
+        incident(Subject::Workload(key(APP)), Severity::Warn, false),
+        incident(Subject::Workload(key(PG)), Severity::Critical, false),
+        incident(Subject::Host(r.host.clone()), Severity::Critical, false),
+    ];
+    let summary = |i: usize| {
+        let w = &r.workloads[i];
+        workload_summary(w.key.clone(), w.facts.as_ref(), w.state.run, &incidents, BTreeMap::new())
+    };
+    assert_eq!(summary(APP).status, Status::Warn);
+    assert_eq!(summary(XRAY).status, Status::Ok);
 }
 
 #[test]

@@ -23,11 +23,12 @@ struct Finding {
 }
 
 // crates/server — stateful, owns the incident lifecycle
-fn evaluate(findings: &[Finding], store: &Store, now: Timestamp) -> Vec<IncidentChange>
+fn lifecycle::next(rule, active, reopenable, finding, host, now) -> Transition   // pure
+fn evaluate::apply(conn, findings, active, observed, now) -> Result<()>          // stores transitions
 ```
 
 - `skym status` on a host runs `judge` only: what is wrong at this moment.
-- `skym-server` adds time: opening, resolving and reopening incidents, plus findings only it can make (lost heartbeats, disk growth projection, external endpoint and TLS probes).
+- `skym-server` adds time: opening, resolving and reopening incidents, plus findings only it can make (lost heartbeats, disk growth projection; external endpoint and TLS probes are planned).
 
 Rules that need a short history get it as input, so `judge` stays pure: `skym` reports the times of crash restarts within the last hour as workload state, and the caller passes recent OOM kills and exception groups. Locally, `skym status` collects them in the same pass; on the server, they come from the store.
 
@@ -42,6 +43,8 @@ severity ⇐ follows the latest finding (warn ↔ critical); the peak severity i
 numeric thresholds use hysteresis: open at X, resolve below X − δ
 ```
 
+N and M count reports, not minutes: the times below assume the default 60-second report interval.
+
 ## Default rules
 
 | Code | Opens when | Severity | Resolves when |
@@ -55,34 +58,38 @@ numeric thresholds use hysteresis: open at X, resolve below X − δ
 | `LOG_UNBOUNDED` | `json-file` log driver without `max-size` (the `local` driver rotates by default) | warn | A size limit is configured |
 | `DATASTORE_UNREACHABLE` | Local probe fails twice in a row | critical | Probe succeeds twice in a row |
 | `REPLICATION_LAG` | Lag > 30 seconds | critical at > 5 minutes | Lag < 10 seconds for 5 minutes |
-| `ENDPOINT_DOWN` | 2 consecutive probes return 5xx, time out (10 s) or fail to connect | critical; warn for 4xx other than 401, 403, 404 | 2 consecutive good probes |
-| `CERT_EXPIRING` | Certificate expires within 14 days | critical within 7 days or expired | A certificate with a later expiry is served |
+| `ENDPOINT_DOWN` (planned) | 2 consecutive probes return 5xx, time out (10 s) or fail to connect | critical; warn for 4xx other than 401, 403, 404 | 2 consecutive good probes |
+| `CERT_EXPIRING` (planned) | Certificate expires within 14 days | critical within 7 days or expired | A certificate with a later expiry is served |
 | `APP_EXCEPTIONS` | Within 15 minutes: `final_count` ≥ 5, or non-final count ≥ 50, or `_stderr` count ≥ 10 | critical at `final_count` ≥ 20 | Below every threshold for 30 minutes |
 
 Notes:
 
 - **No memory percentage rule.** Linux uses free memory as cache, so high usage alone is not a problem; OOM kills are.
 - **`WORKLOAD_UNHEALTHY` decays to warn after 24 hours.** A container that stays unhealthy without business impact would otherwise hold a critical status forever and hide new problems. Other codes keep their severity while open.
-- **Disk projection** uses a linear fit over the last 6 hours of used space. With less than 6 hours of data, only the percentage applies.
+- **Disk projection** uses a least-squares fit over the last 6 hours of used space. It needs at least 30 samples spanning 5 hours; with less, only the percentage applies.
 - `business` exception groups never open incidents; see the [exception protocol](exception-protocol.md). Neither do `_PROTOCOL_ERROR` groups: they point at the application's logging, not at a failure in production. `_OVERFLOW` groups count like any other application failure.
-- All values above are defaults defined in `crates/core`.
+- All values above are defaults. Rule thresholds are defined in `crates/core`; heartbeat and disk projection, which only the server can judge, in `crates/server`.
 
 ## Muting
 
 Some conditions are known and accepted: a container that is always unhealthy, a disk that normally runs at 90%. They can be muted in the server configuration:
 
-```yaml
-mute:
-  - subject: { host: x, service: legacy-worker }
-    code: WORKLOAD_UNHEALTHY
-    reason: known issue, no business impact
-  - subject: { host: i, mount: /data }
-    code: DISK_FILLING
-    until: 2026-12-31
+```toml
+[[mute]]
+subject = "workload:x/legacy/worker"
+code = "WORKLOAD_UNHEALTHY"
+reason = "known issue, no business impact"
+
+[[mute]]
+subject = "mount:i:/data"
+code = "DISK_FILLING"
+until = "2026-12-31T00:00:00Z"
 ```
 
+`subject` is a subject string as the API returns it (`host:x`, `workload:x/project/service`, `mount:x:/path`); `until` is an RFC 3339 time.
+
 ```text
-muted(incident) ⇔ ∃ m ∈ mute: matches(m.subject, incident.subject)
+muted(incident) ⇔ ∃ m ∈ mute: m.subject = incident.subject
                              ∧ m.code = incident.code
                              ∧ (m.until = none ∨ now < m.until)
 

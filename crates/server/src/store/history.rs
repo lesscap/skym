@@ -1,7 +1,6 @@
 //! Events and exception groups, appended and queried by time.
 
-use super::{from_json, json, parsed};
-use crate::db::{parse_ts, ts};
+use super::{from_json, json, parsed, ts};
 use jiff::Timestamp;
 use rusqlite::{Connection, params};
 use skym_core::model::{Event, ExceptionClass, ExceptionGroup, LocalEvent};
@@ -34,7 +33,7 @@ pub fn events(
     let args = params![host, subject.map(Subject::to_string), ts(since), limit as i64];
     let rows = stmt.query_map(args, |r| {
         Ok(Event {
-            ts: parse_ts(&r.get::<_, String>(0)?)?,
+            ts: parsed(r.get(0)?)?,
             subject: parsed(r.get(1)?)?,
             kind: from_json(&r.get::<_, String>(2)?)?,
         })
@@ -57,7 +56,7 @@ pub fn oom_kills(
             Subject::Workload(k) => Some(k),
             _ => None,
         };
-        Ok(LocalEvent::OomKilled { ts: parse_ts(&r.get::<_, String>(0)?)?, workload })
+        Ok(LocalEvent::OomKilled { ts: parsed(r.get(0)?)?, workload })
     })?;
     rows.collect()
 }
@@ -129,8 +128,8 @@ pub fn exceptions(
             code: r.get(4)?,
             count: r.get(5)?,
             final_count: r.get(6)?,
-            first_seen: parse_ts(&r.get::<_, String>(7)?)?,
-            last_seen: parse_ts(&r.get::<_, String>(8)?)?,
+            first_seen: parsed(r.get(7)?)?,
+            last_seen: parsed(r.get(8)?)?,
             biz_keys: from_json(&r.get::<_, String>(9)?)?,
             sample: r.get::<_, Option<String>>(10)?.map(|s| from_json(&s)).transpose()?,
         })

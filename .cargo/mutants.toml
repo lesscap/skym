@@ -14,8 +14,9 @@ exclude_re = [
     # Equivalent: `<` and `<=` differ only for an identical (length, path), which yields the same mount.
     "host.rs.*replace < with <= in real_mounts",
 ]
-# I/O wiring against Docker, /proc and the network.
+# I/O wiring against Docker, /proc and the network; test support.
 exclude_globs = [
+    "crates/core/src/fixtures.rs",
     "crates/server/src/main.rs",
     "crates/agent/src/main.rs",
     "crates/agent/src/commands.rs",

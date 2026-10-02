@@ -5,6 +5,7 @@ pub mod history;
 pub mod hosts;
 pub mod incidents;
 
+use jiff::Timestamp;
 use rusqlite::Connection;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -35,6 +36,12 @@ impl Store {
     }
 }
 
+// Stored forms. Timestamps are whole seconds in UTC (`…Z`), so they sort as time.
+
+pub(crate) fn ts(t: Timestamp) -> String {
+    Timestamp::from_second(t.as_second()).expect("in range").to_string()
+}
+
 pub(crate) fn json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).expect("serializable")
 }
@@ -45,17 +52,27 @@ where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    s.parse().map_err(|e: T::Err| {
-        rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            e.to_string().into(),
-        )
-    })
+    s.parse().map_err(|e: T::Err| bad_text(e.to_string()))
 }
 
 pub(crate) fn from_json<T: DeserializeOwned>(text: &str) -> rusqlite::Result<T> {
-    serde_json::from_str(text).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
-    })
+    serde_json::from_str(text).map_err(bad_text)
+}
+
+fn bad_text(e: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_timestamps_sort_as_time() {
+        let a: Timestamp = "2026-10-01T12:00:00.900Z".parse().unwrap();
+        let b: Timestamp = "2026-10-01T12:00:01Z".parse().unwrap();
+        assert_eq!(ts(a), "2026-10-01T12:00:00Z");
+        assert!(ts(a) < ts(b));
+        assert_eq!(parsed::<Timestamp>(ts(b)).unwrap(), b);
+    }
 }

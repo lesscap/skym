@@ -3,27 +3,23 @@
 use skym_core::report::Report;
 use skym_core::rules::{Finding, Severity};
 use skym_core::subject::Subject;
-use skym_core::view::{HostView, IncidentView, Status, WorkloadSummary, rollup};
+use skym_core::view::{HostView, IncidentView, Status, rollup, workload_summary};
 use std::collections::BTreeMap;
 
 pub fn host_view(report: &Report, mut findings: Vec<Finding>) -> HostView {
     findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.subject.cmp(&b.subject)));
     let incidents: Vec<IncidentView> = findings.into_iter().map(incident).collect();
-    let status_of = |subject: &Subject| {
-        let own: Vec<IncidentView> =
-            incidents.iter().filter(|i| i.subject == *subject).cloned().collect();
-        rollup(&own)
-    };
     let workloads = report
         .workloads
         .iter()
-        .map(|w| WorkloadSummary {
-            key: w.key.clone(),
-            kind: w.facts.as_ref().map(|f| f.kind),
-            status: status_of(&Subject::Workload(w.key.clone())),
-            run: w.state.run,
-            image: w.facts.as_ref().map(|f| f.image.clone()),
-            links: BTreeMap::new(),
+        .map(|w| {
+            workload_summary(
+                w.key.clone(),
+                w.facts.as_ref(),
+                w.state.run,
+                &incidents,
+                BTreeMap::new(),
+            )
         })
         .collect();
     HostView {
@@ -107,9 +103,7 @@ mod tests {
     use skym_core::subject::WorkloadKey;
 
     fn report() -> Report {
-        let path =
-            format!("{}/../core/tests/fixtures/report-full.json", env!("CARGO_MANIFEST_DIR"));
-        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        skym_core::fixtures::full_report()
     }
 
     fn finding(subject: Subject, code: IncidentCode, severity: Severity) -> Finding {

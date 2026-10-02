@@ -106,8 +106,9 @@ Each entity carries two groups of attributes.
 A change in facts produces an event:
 
 ```text
-workload.facts.image          changed ⇒ Deployed { from, to }
-workload.facts (other fields) changed ⇒ ConfigChanged
+workload.facts.image or image_digest changed       ⇒ Deployed { from, to }   (12-character image IDs when only the ID changed)
+workload.facts (other fields both sides have) changed,
+  both reported by the same skym version            ⇒ ConfigChanged
 host.facts.boot_time          changed ⇒ HostRebooted
 host.facts.kernel             changed ⇒ KernelChanged
 ```

@@ -41,8 +41,7 @@ fn app_with(mute: Vec<Mute>) -> (Router, AppState) {
 
 /// A healthy report from host x, `mins_ago` minutes old.
 fn report(mins_ago: i64) -> Report {
-    let path = format!("{}/../core/tests/fixtures/report-full.json", env!("CARGO_MANIFEST_DIR"));
-    let mut r: Report = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut r: Report = skym_core::fixtures::full_report();
     r.ts = Timestamp::now() - SignedDuration::from_mins(mins_ago);
     for g in &mut r.exceptions {
         (g.first_seen, g.last_seen) = (r.ts, r.ts);
@@ -154,17 +153,11 @@ async fn gzip_bodies_are_accepted() {
     assert_eq!(get(&app, "/api/hosts/x").await["status"], "ok");
 }
 
-fn down(mut r: Report) -> Report {
-    r.workloads[0].state.run = RunState::Exited;
-    r.workloads[0].state.exit_code = Some(1);
-    r
-}
-
 #[tokio::test]
 async fn an_incident_from_reports_to_overview_workload_and_timeline() {
     let (app, _) = app();
     for mins in [9, 8] {
-        assert_eq!(post(&app, &down(report(mins))).await, StatusCode::OK);
+        assert_eq!(post(&app, &down(report(mins), 0)).await, StatusCode::OK);
     }
     let overview = get(&app, "/api/overview").await;
     let incident = &overview["customers"][0]["hosts"][0]["incidents"][0];
@@ -194,7 +187,7 @@ async fn an_incident_from_reports_to_overview_workload_and_timeline() {
 async fn a_failed_source_does_not_resolve_what_it_could_not_see() {
     let (app, _) = app();
     for mins in [9, 8] {
-        post(&app, &down(report(mins))).await;
+        post(&app, &down(report(mins), 0)).await;
     }
     let mut blind = report(7);
     blind.workloads.clear();
@@ -235,7 +228,8 @@ async fn a_silent_host_loses_its_heartbeat_and_a_report_restores_it() {
     assert_eq!(resolved["incidents"][0]["code"], "HEARTBEAT_LOST");
 }
 
-fn down_at(mut r: Report, i: usize) -> Report {
+/// Workload `i` of the report exited with an error.
+fn down(mut r: Report, i: usize) -> Report {
     r.workloads[i].state.run = RunState::Exited;
     r.workloads[i].state.exit_code = Some(1);
     r
@@ -251,7 +245,7 @@ async fn views_scope_incidents_and_ignore_muted_ones() {
     };
     let (app, _) = app_with(vec![mute]);
     for mins in [9, 8] {
-        let mut r = down_at(down_at(report(mins), 0), 1);
+        let mut r = down(down(report(mins), 0), 1);
         r.exceptions[0].workload = r.workloads[0].key.clone();
         post(&app, &r).await;
     }
@@ -290,7 +284,7 @@ async fn views_scope_incidents_and_ignore_muted_ones() {
 async fn filters_limits_and_truncation() {
     let (app, _) = app();
     for mins in [9, 8] {
-        post(&app, &down_at(down_at(report(mins), 0), 1)).await;
+        post(&app, &down(down(report(mins), 0), 1)).await;
     }
     let mut redeployed = report(7);
     redeployed.workloads[0].facts.as_mut().unwrap().image = "x:2".into();
@@ -344,7 +338,7 @@ async fn a_host_with_only_muted_trouble_is_ok() {
     };
     let (app, _) = app_with(vec![mute]);
     for mins in [9, 8] {
-        post(&app, &down_at(report(mins), 1)).await;
+        post(&app, &down(report(mins), 1)).await;
     }
     assert_eq!(get(&app, "/api/hosts/x").await["status"], "ok");
 }
@@ -353,7 +347,7 @@ async fn a_host_with_only_muted_trouble_is_ok() {
 async fn resolved_incidents_respect_since_and_timelines_their_limit() {
     let (app, _) = app();
     for mins in [9, 8] {
-        post(&app, &down_at(report(mins), 1)).await;
+        post(&app, &down(report(mins), 1)).await;
     }
     for mins in [7, 6] {
         post(&app, &report(mins)).await;

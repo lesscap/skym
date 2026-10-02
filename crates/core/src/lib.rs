@@ -2,6 +2,8 @@
 //!
 //! Pure: no I/O, no async runtime.
 
+#[cfg(feature = "fixtures")]
+pub mod fixtures;
 pub mod judge;
 pub mod model;
 pub mod report;

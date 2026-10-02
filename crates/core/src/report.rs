@@ -29,7 +29,6 @@ pub struct Report {
     #[serde(default)]
     pub errors: Vec<String>,
     /// The reporting `skym`'s version, in every report (host facts carry it only now and then).
-    #[serde(default)]
     pub agent_version: Option<String>,
 }
 

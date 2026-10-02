@@ -1,7 +1,6 @@
 //! Latest facts and state per host and workload, and disk usage samples.
 
-use super::{from_json, json};
-use crate::db::{parse_ts, ts};
+use super::{from_json, json, parsed, ts};
 use crate::diff::Stored;
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -34,8 +33,8 @@ fn host_row(r: &rusqlite::Row) -> rusqlite::Result<HostRow> {
         facts: r.get::<_, Option<String>>(1)?.map(|f| from_json(&f)).transpose()?,
         state: from_json(&r.get::<_, String>(2)?)?,
         errors: from_json(&r.get::<_, String>(3)?)?,
-        last_report_ts: parse_ts(&r.get::<_, String>(4)?)?,
-        last_seen: parse_ts(&r.get::<_, String>(5)?)?,
+        last_report_ts: parsed(r.get(4)?)?,
+        last_seen: parsed(r.get(5)?)?,
     })
 }
 
@@ -128,7 +127,7 @@ pub fn workloads(c: &Connection, host: &str) -> rusqlite::Result<Vec<WorkloadRow
             key: WorkloadKey { host: host.to_string(), project: r.get(0)?, service: r.get(1)? },
             facts: r.get::<_, Option<String>>(2)?.map(|f| from_json(&f)).transpose()?,
             state: from_json(&r.get::<_, String>(3)?)?,
-            last_seen: parse_ts(&r.get::<_, String>(4)?)?,
+            last_seen: parsed(r.get(4)?)?,
         })
     })?;
     rows.collect()
@@ -155,7 +154,7 @@ pub fn disk_samples(
 ) -> rusqlite::Result<Vec<(Timestamp, u64)>> {
     let mut stmt = c.prepare("SELECT ts, used_bytes FROM disk_samples WHERE host = ?1 AND path = ?2 AND ts >= ?3 ORDER BY ts")?;
     let rows = stmt.query_map(params![host, path, ts(since)], |r| {
-        Ok((parse_ts(&r.get::<_, String>(0)?)?, r.get::<_, i64>(1)? as u64))
+        Ok((parsed(r.get(0)?)?, r.get::<_, i64>(1)? as u64))
     })?;
     rows.collect()
 }

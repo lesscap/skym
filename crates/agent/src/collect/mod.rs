@@ -4,6 +4,7 @@
 pub mod containers;
 mod datastore;
 mod docker;
+mod events;
 pub mod host;
 mod logs;
 mod systemd;
@@ -12,7 +13,8 @@ use crate::config::Config;
 use crate::exceptions::Detail;
 use bollard::Docker;
 use bollard::models::ContainerInspectResponse;
-use containers::{container_event, crash_restarts, facts_of, ooms, state_of, timestamp, winners};
+use containers::{facts_of, state_of, timestamp, winners};
+use events::{container_event, crash_restarts, ooms};
 use futures_util::future::join_all;
 use jiff::{SignedDuration, Timestamp};
 use skym_core::model::{
@@ -21,6 +23,17 @@ use skym_core::model::{
 };
 use skym_core::subject::WorkloadKey;
 use std::collections::BTreeMap;
+
+/// Every success and every failure of independent calls: one failure never hides the rest.
+fn split<T, E>(results: impl IntoIterator<Item = Result<T, E>>) -> (Vec<T>, Vec<E>) {
+    results.into_iter().fold((Vec::new(), Vec::new()), |(mut ok, mut errors), r| {
+        match r {
+            Ok(v) => ok.push(v),
+            Err(e) => errors.push(e),
+        }
+        (ok, errors)
+    })
+}
 
 pub struct Window {
     pub now: Timestamp,

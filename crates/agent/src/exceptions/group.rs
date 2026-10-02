@@ -2,6 +2,7 @@
 
 use super::line::{Line, Record, classify};
 use super::text::{redact, truncate, unstructured_code};
+use super::traceback::{Step, Traceback, step};
 use super::{Detail, LogLine, Stream};
 use jiff::Timestamp;
 use skym_core::model::{ExceptionClass, ExceptionGroup, ExceptionSample};
@@ -30,32 +31,6 @@ struct Pending {
     /// Started by a logged message (`logger.exception`), which then stays the message.
     logged: bool,
 }
-
-/// Where a Python traceback is: frames still coming, the exception line seen, or a
-/// "During handling of the above exception…" line announcing a chained traceback.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Traceback {
-    No,
-    Frames,
-    Done,
-    Chained,
-}
-
-/// What a stderr line does to a Python traceback in progress.
-enum Step {
-    Start,
-    Join,
-    Skip,
-    Summary,
-    Chain,
-    Pass,
-}
-
-const HEADER: &str = "Traceback (most recent call last)";
-const CHAINS: [&str; 2] = [
-    "During handling of the above exception, another exception occurred",
-    "The above exception was the direct cause of the following exception",
-];
 
 impl Grouper {
     pub fn new(workload: WorkloadKey, detail: Detail) -> Self {
@@ -98,7 +73,8 @@ impl Grouper {
     /// Chained tracebacks continue the same record. Returns whether the line was consumed.
     fn python(&mut self, line: &LogLine) -> bool {
         let text = line.text.trim();
-        match self.step(line) {
+        let pending = self.pending.as_ref().map(|p| (p.traceback, p.stack.is_empty()));
+        match step(pending, line.text) {
             Step::Start => {
                 self.flush();
                 let Line::Stderr(record) = classify(line.text, Stream::Stderr) else {
@@ -138,27 +114,6 @@ impl Grouper {
             }
         }
         true
-    }
-
-    fn step(&self, line: &LogLine) -> Step {
-        let text = line.text.trim();
-        let indented = line.text.starts_with([' ', '\t']);
-        let Some(p) = &self.pending else {
-            return if text.starts_with(HEADER) { Step::Start } else { Step::Pass };
-        };
-        let logged = p.traceback == Traceback::No && p.stack.is_empty();
-        match p.traceback {
-            _ if text.starts_with(HEADER) && (logged || p.traceback == Traceback::Chained) => {
-                Step::Join
-            }
-            _ if text.starts_with(HEADER) => Step::Start,
-            Traceback::Frames | Traceback::Done | Traceback::Chained if text.is_empty() => {
-                Step::Skip
-            }
-            Traceback::Frames if !indented => Step::Summary,
-            Traceback::Done if CHAINS.iter().any(|c| text.starts_with(c)) => Step::Chain,
-            _ => Step::Pass,
-        }
     }
 
     fn flush(&mut self) {

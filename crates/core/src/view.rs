@@ -11,7 +11,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// `Unknown` means no data, e.g. a host that never reported.
+/// `Unknown` means no data, e.g. a host that never reported. Ordered by urgency:
+/// knowing nothing about a host outranks a warning, not a critical incident.
 #[derive(
     Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord,
 )]
@@ -19,8 +20,8 @@ use std::collections::BTreeMap;
 pub enum Status {
     Ok,
     Warn,
-    Critical,
     Unknown,
+    Critical,
 }
 
 impl From<Severity> for Status {
@@ -185,6 +186,30 @@ pub enum TimelineKind {
 }
 
 /// Highest severity among unmuted incidents; `Ok` when there are none.
-pub fn rollup(incidents: &[IncidentView]) -> Status {
-    incidents.iter().filter(|i| !i.muted).map(|i| i.severity).max().map_or(Status::Ok, Status::from)
+pub fn rollup<'a>(incidents: impl IntoIterator<Item = &'a IncidentView>) -> Status {
+    incidents
+        .into_iter()
+        .filter(|i| !i.muted)
+        .map(|i| i.severity)
+        .max()
+        .map_or(Status::Ok, Status::from)
+}
+
+/// A workload's line in a host view, its status rolled up from its own incidents.
+pub fn workload_summary(
+    key: WorkloadKey,
+    facts: Option<&WorkloadFacts>,
+    run: RunState,
+    incidents: &[IncidentView],
+    links: BTreeMap<String, String>,
+) -> WorkloadSummary {
+    let subject = Subject::Workload(key.clone());
+    WorkloadSummary {
+        status: rollup(incidents.iter().filter(|i| i.subject == subject)),
+        kind: facts.map(|f| f.kind),
+        image: facts.map(|f| f.image.clone()),
+        run,
+        links,
+        key,
+    }
 }

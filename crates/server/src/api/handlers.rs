@@ -1,4 +1,4 @@
-use super::views::{self, incident_view, links};
+use super::views::{self, incident_view};
 use super::{ApiError, AppState, ReportingHost};
 use crate::ingest::{IngestError, MAX_AHEAD, ingest};
 use crate::store::{history, hosts, incidents};
@@ -12,8 +12,7 @@ use skym_core::model::ExceptionClass;
 use skym_core::subject::{Subject, WorkloadKey};
 use skym_core::time::parse_since;
 use skym_core::view::{
-    ExceptionList, HostView, IncidentList, IncidentView, Overview, Timeline, WorkloadSummary,
-    WorkloadView, rollup,
+    ExceptionList, HostView, IncidentList, IncidentView, Overview, Timeline, WorkloadView,
 };
 
 type ApiResult<T> = Result<Json<T>, ApiError>;
@@ -102,39 +101,9 @@ pub async fn host(State(s): State<AppState>, Path(host): Path<String>) -> ApiRes
             ))
         })
         .await?;
-    let incidents: Vec<IncidentView> =
-        open.iter().map(|i| incident_view(i, &s.cfg.mute, now)).collect();
-    let unmuted = |subject: &Subject| -> Vec<IncidentView> {
-        incidents.iter().filter(|i| !i.muted && (i.subject == *subject)).cloned().collect()
-    };
-    let workloads = workloads
-        .into_iter()
-        .map(|w| {
-            let subject = Subject::Workload(w.key.clone());
-            WorkloadSummary {
-                status: rollup(&unmuted(&subject)),
-                kind: w.facts.as_ref().map(|f| f.kind),
-                run: w.state.run,
-                image: w.facts.map(|f| f.image),
-                links: links(&subject),
-                key: w.key,
-            }
-        })
-        .collect();
+    let incidents = open.iter().map(|i| incident_view(i, &s.cfg.mute, now)).collect();
     let customer = s.cfg.hosts.iter().find(|h| h.id == host).map(|h| h.customer.clone());
-    Ok(Json(HostView {
-        status: views::host_status(&incidents, row.is_some()),
-        last_report_ago: row
-            .as_ref()
-            .map(|r| skym_core::time::format_duration(now.duration_since(r.last_seen))),
-        facts: row.as_ref().and_then(|r| r.facts.clone()),
-        errors: row.as_ref().map(|r| r.errors.clone()).unwrap_or_default(),
-        state: row.map(|r| r.state),
-        id: host,
-        customer,
-        workloads,
-        incidents,
-    }))
+    Ok(Json(views::host(host, customer, row, workloads, incidents, now)))
 }
 
 pub async fn workload(
@@ -160,22 +129,12 @@ pub async fn workload(
         })
         .await?;
     let row = row.ok_or_else(|| ApiError::not_found(format!("workload {subject} is unknown")))?;
-    let incidents: Vec<IncidentView> = open
+    let incidents = open
         .iter()
         .filter(|i| i.subject == subject)
         .map(|i| incident_view(i, &s.cfg.mute, now))
         .collect();
-    let unmuted: Vec<IncidentView> = incidents.iter().filter(|i| !i.muted).cloned().collect();
-    Ok(Json(WorkloadView {
-        key,
-        status: rollup(&unmuted),
-        facts: row.facts,
-        state: row.state,
-        incidents,
-        exceptions,
-        events,
-        links: links(&subject),
-    }))
+    Ok(Json(views::workload(row, incidents, exceptions, events)))
 }
 
 #[derive(Deserialize)]

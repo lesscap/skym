@@ -1,5 +1,6 @@
 //! Container logs → exception groups.
 
+use super::split;
 use crate::exceptions::{Detail, Grouper, LogLine, Stream};
 use bollard::Docker;
 use bollard::container::LogOutput;
@@ -27,13 +28,8 @@ pub async fn read(
         .buffer_unordered(8)
         .collect()
         .await;
-    results.into_iter().fold((Vec::new(), Vec::new()), |(mut groups, mut errors), r| {
-        match r {
-            Ok(g) => groups.extend(g),
-            Err(e) => errors.push(e),
-        }
-        (groups, errors)
-    })
+    let (groups, errors) = split(results);
+    (groups.concat(), errors)
 }
 
 async fn read_one(

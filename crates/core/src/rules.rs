@@ -98,7 +98,7 @@ impl std::str::FromStr for Severity {
 }
 
 /// What a rule found in one evaluation.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Finding {
     pub subject: Subject,
     pub code: IncidentCode,
@@ -109,7 +109,6 @@ pub struct Finding {
 /// How findings turn into incidents over consecutive evaluations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rule {
-    pub code: IncidentCode,
     pub open_after: u32,
     pub resolve_after: u32,
     pub decay_to_warn_after: Option<SignedDuration>,
@@ -129,5 +128,5 @@ pub const fn rule(code: IncidentCode) -> Rule {
             (1, 1, None)
         }
     };
-    Rule { code, open_after, resolve_after, decay_to_warn_after }
+    Rule { open_after, resolve_after, decay_to_warn_after }
 }

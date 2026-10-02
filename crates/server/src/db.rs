@@ -1,7 +1,6 @@
 //! SQLite: opening, migrations, and the one timestamp format stored everywhere.
 
 use anyhow::Context;
-use jiff::Timestamp;
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -123,28 +122,9 @@ fn prepare(conn: &mut Connection) -> anyhow::Result<()> {
 }
 
 /// Whole seconds, `…Z`: text order equals time order.
-pub fn ts(t: Timestamp) -> String {
-    Timestamp::from_second(t.as_second()).expect("in range").to_string()
-}
-
-pub fn parse_ts(s: &str) -> rusqlite::Result<Timestamp> {
-    s.parse().map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn stored_timestamps_sort_as_time() {
-        let a: Timestamp = "2026-10-01T12:00:00.900Z".parse().unwrap();
-        let b: Timestamp = "2026-10-01T12:00:01Z".parse().unwrap();
-        assert_eq!(ts(a), "2026-10-01T12:00:00Z");
-        assert!(ts(a) < ts(b));
-        assert_eq!(parse_ts(&ts(b)).unwrap(), b);
-    }
 
     #[test]
     fn migrations_apply_once() {
