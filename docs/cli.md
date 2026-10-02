@@ -1,0 +1,112 @@
+# skym CLI
+
+`skym` is the binary installed on every monitored host. It serves three readers: a person debugging on the host, an AI agent running on the host, and the operator installing it.
+
+## Commands
+
+| Command | Purpose | Network |
+| --- | --- | --- |
+| `skym status [--json]` | What is wrong on this host right now: collect once, run `judge`, print findings | no |
+| `skym exceptions [--workload <project/service>] [--since 1h] [--json]` | Exception groups on this host, in full detail | no |
+| `skym report --dry-run` | Print the exact report that would be sent | no |
+| `skym doctor` | Check the installation: configuration, Docker socket access, server reachability, token validity (sends one real report) | yes |
+| `skym agent` | Run in the foreground, collecting and reporting every interval; managed by systemd | yes |
+| `skym schema [<command>]` | Print the JSON Schema of a command's `--json` output | no |
+| `skym version` | Print the version | no |
+
+### `status`
+
+```
+host i · 1 critical · 1 warn
+CRIT  dify/weaviate     CRASH_LOOP       12 restarts in the last hour
+WARN  /data             DISK_FILLING     87% used
+```
+
+With `--json`, the output has the same shape as `GET /api/hosts/{host}` in the [query API](api.md), so an agent reads a host the same way locally and remotely.
+
+Findings that need history only the server has (lost heartbeats, disk growth projection, endpoint and TLS probes) do not appear locally.
+
+Exit codes follow the Nagios convention, so scripts and existing monitoring tools can use them directly:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | ok |
+| 1 | at least one warn |
+| 2 | at least one critical |
+| 3 | collection failed |
+
+### `exceptions`
+
+The server cannot ask a host for more data, so details that are not reported are available here instead. Nothing printed by this command leaves the host, so it is not limited by report size or redaction: business groups include samples and stack traces are not truncated.
+
+### `report --dry-run`
+
+Shows exactly what leaves the host. Host owners can audit it before and after installation.
+
+## Configuration
+
+```text
+/etc/skym/config.toml   configuration
+/etc/skym/token         host token, mode 0600, kept out of the configuration
+/var/lib/skym/          state: undelivered reports, log cursors
+```
+
+```toml
+server = "https://skym.example.com"
+token_file = "/etc/skym/token"
+interval = "60s"
+
+[docker]
+enabled = true                 # false if the host owner does not grant Docker socket access
+exclude = ["noisy-container"]
+
+[[systemd]]                    # one entry per service that does not run in Docker
+unit = "xray"
+ports = [443]                  # optional: ports that must be listening
+
+[report]
+public_ip = false
+```
+
+The host configuration holds no host name and no customer: the server derives both from the token. Endpoints and certificates are probed by the server and configured there.
+
+## Workload sources
+
+| Source | How workloads are found | Workload key |
+| --- | --- | --- |
+| `docker` | Discovered: containers with a restart policy or belonging to a compose service | `(host, compose project or "-", service or container name)` |
+| `systemd` | Declared in `[[systemd]]` | `(host, "_systemd", unit)` |
+
+Compose project names cannot be `-` or start with `_`, so keys never collide. Both sources produce the same workload model; judgement, incidents and the API do not depend on the source. A systemd unit that is active but not listening on a declared port is `WORKLOAD_DOWN`.
+
+## Permissions
+
+Every check is read-only.
+
+| Data | How | Needs |
+| --- | --- | --- |
+| Containers | Docker API: list, inspect, events, logs | `docker` group |
+| Memory | cgroup files | nothing |
+| OOM kills | `oom_kill` counter in `/proc/vmstat` for the host; `State.OOMKilled` from inspect for the container | nothing |
+| Datastores | Docker healthcheck if defined; otherwise a connection from the host to the container's address, with credentials read locally from inspect | `docker` group |
+| systemd units | Unit state; listening sockets from `/proc/net/tcp*` | nothing |
+
+`skym` never runs `docker exec`. It does not execute anything inside containers.
+
+## Running
+
+`skym agent` runs as a dedicated `skym` user under systemd:
+
+```ini
+[Service]
+User=skym
+SupplementaryGroups=docker
+ExecStart=/usr/local/bin/skym agent
+ProtectSystem=strict
+ReadWritePaths=/var/lib/skym
+NoNewPrivileges=true
+PrivateTmp=true
+Restart=always
+```
+
+Releases are static (musl) binaries for amd64 and arm64 with SHA-256 checksums, published on GitHub Releases.

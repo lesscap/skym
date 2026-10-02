@@ -1,0 +1,100 @@
+# Report protocol
+
+`skym agent` sends one message type, `Report`, on a fixed interval. Each report is also the host's heartbeat.
+
+## Transport
+
+```http
+POST /api/report
+Authorization: Bearer <host token>
+Content-Type: application/json
+Content-Encoding: gzip
+```
+
+- The server identifies the host from the token. The `host` field in the body is informational and ignored for identity.
+- The response only acknowledges receipt. It never carries instructions.
+- Default interval: 60 seconds.
+
+## Message
+
+```rust
+struct Report {
+    host: HostId,
+    ts: Timestamp,                     // collection time on the host
+    host_facts_hash: u64,
+    host_facts: Option<HostFacts>,
+    host_state: HostState,
+    workloads: Vec<WorkloadReport>,
+    local_events: Vec<LocalEvent>,     // events only visible on the host, e.g. OOM kills
+    exceptions: Vec<ExceptionGroup>,   // groups observed since the previous report
+}
+
+struct WorkloadReport {
+    key: WorkloadKey,
+    facts_hash: u64,
+    facts: Option<WorkloadFacts>,
+    state: WorkloadState,
+}
+```
+
+Entity fields are defined in the [domain model](domain-model.md).
+
+## When facts are sent
+
+Facts change rarely, so most reports carry only the hash and the state.
+
+```text
+send facts for entity e ⇔ hash(e.facts) ≠ hash last sent for e
+                        ∨ first report after skym starts
+                        ∨ first report of the current hour
+```
+
+- The hash is sent in every report, so the server always knows whether its copy is current.
+- The hourly resend bounds recovery: if the server loses facts (store reset, failed replay, new server), it has them again within an hour without asking the host. The server never asks; see the [security model](architecture.md#security-model).
+- A workload whose facts the server does not have yet is shown with its state only.
+
+## Server processing
+
+| Data | Stored as |
+| --- | --- |
+| Facts, state | Latest value per host and workload, overwritten on each report |
+| Used space per mount | Time series, used to project when a mount fills up |
+| Events, incidents, exception groups | Appended, queried by time |
+
+Events derived from facts (`Deployed`, `ConfigChanged`, `HostRebooted`, `KernelChanged`) are produced by the server by comparing the incoming facts with the stored ones. Full reports are not kept.
+
+## Buffering and replay
+
+When a report cannot be delivered, `skym` keeps it in a local buffer (bounded by count and age, 24 hours by default) and sends buffered reports in order once the server is reachable. The server deduplicates by `(host, ts)`, so replaying a report twice is harmless.
+
+Log reading keeps a per-workload cursor on the host, so a restart of `skym` neither repeats nor skips log lines.
+
+## Compatibility
+
+Hosts in the field run different `skym` versions, and the server accepts all of them. The protocol has no version number; it follows the [evolution](architecture.md#evolution) rules. The reporting `skym` version is part of host facts, for diagnosis only.
+
+## Never reported
+
+- Container environment variables
+- Labels outside the whitelist (`com.docker.compose.*`)
+- Public IP addresses, unless enabled in configuration
+- Full log lines; exception samples are truncated and filtered for common secret patterns
+
+## Size
+
+Estimated per container: facts about 1 KB, state about 150 bytes, as JSON.
+
+| Containers per host | Typical report (state only, gzip) | Report with all facts (gzip) |
+| --- | --- | --- |
+| 50 | ~1 KB | ~5 KB |
+| 500 | ~8 KB | ~55 KB |
+
+## Collection cost on the host
+
+| Data | Source |
+| --- | --- |
+| Container list and run state | One `GET /containers/json` per interval |
+| Workload facts | `inspect` only when a container ID is new |
+| Restarts | Docker events stream |
+| Memory usage | cgroup files read directly, not `docker stats` |
+| Exceptions | Incremental log reads for workloads only |
