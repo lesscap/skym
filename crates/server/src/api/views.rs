@@ -173,7 +173,7 @@ pub fn timeline(changes: Vec<LogEntry>, events: Vec<Event>, limit: usize) -> Tim
         entry: TimelineKind::Event { event: e.kind },
     });
     let mut entries: Vec<TimelineEntry> = from_changes.chain(from_events).collect();
-    entries.sort_by(|a, b| b.ts.cmp(&a.ts));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.ts));
     let (entries, truncated) = cap(entries, limit);
     Timeline { entries, truncated }
 }

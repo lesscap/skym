@@ -156,7 +156,7 @@ pub fn sum(newest_first: Vec<ExceptionGroup>) -> Vec<ExceptionGroup> {
         acc
     });
     let mut groups: Vec<ExceptionGroup> = summed.into_values().collect();
-    groups.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+    groups.sort_by_key(|g| std::cmp::Reverse(g.last_seen));
     groups
 }
 
