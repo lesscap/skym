@@ -279,3 +279,23 @@ fn a_class_from_a_newer_agent_does_not_block_the_host() {
         ExceptionClass::Unknown
     );
 }
+
+#[test]
+fn a_failed_source_does_not_clear_unbounded_logs() {
+    let mut c = db::open_in_memory().unwrap();
+    let unbounded = |ts: Timestamp| {
+        let mut r = report(ts);
+        r.workloads[0].facts.as_mut().unwrap().log_max_size = None;
+        r
+    };
+    send(&mut c, &unbounded(t0()), t0()).unwrap();
+    let host_logs = ("host:x".to_string(), IncidentCode::LogUnbounded);
+    assert!(open_codes(&c).contains(&host_logs));
+    let mut partial = report(t0() + mins(1));
+    partial.workloads.clear();
+    partial.errors = vec!["docker: connection refused".into()];
+    send(&mut c, &partial, t0() + mins(1)).unwrap();
+    assert!(open_codes(&c).contains(&host_logs), "unknown, not recovered");
+    send(&mut c, &report(t0() + mins(2)), t0() + mins(2)).unwrap();
+    assert!(!open_codes(&c).contains(&host_logs), "every container bounded again");
+}

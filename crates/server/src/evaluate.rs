@@ -16,7 +16,7 @@ pub fn apply(
     c: &Connection,
     found: &[Finding],
     active: &[Incident],
-    observed: impl Fn(&Subject) -> bool,
+    observed: impl Fn(&Subject, IncidentCode) -> bool,
     now: Timestamp,
 ) -> rusqlite::Result<()> {
     let keys: BTreeSet<(&Subject, IncidentCode)> = found
@@ -26,7 +26,7 @@ pub fn apply(
         .collect();
     for (subject, code) in keys {
         let finding = found.iter().find(|f| f.subject == *subject && f.code == code);
-        if finding.is_none() && !observed(subject) {
+        if finding.is_none() && !observed(subject, code) {
             continue; // not seen this time: unknown, not recovered
         }
         let current = active.iter().find(|i| i.subject == *subject && i.code == code);
@@ -54,7 +54,7 @@ pub fn heartbeat_once(
         configured.iter().map(|h| (h.clone(), seen.get(h).copied())).collect();
     let found = findings::heartbeat(&list, started, interval, now);
     let active = incidents::active_with_code(&tx, IncidentCode::HeartbeatLost)?;
-    let observed = |s: &Subject| {
+    let observed = |s: &Subject, _| {
         let seen = s.host().and_then(|h| seen.get(h).copied());
         !findings::in_grace(seen, started, interval, now)
     };

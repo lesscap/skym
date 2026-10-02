@@ -99,7 +99,7 @@ fn evaluate_host(c: &Connection, r: &Report) -> rusqlite::Result<()> {
     let recent = Recent { oom_events: &oom, exceptions: &exceptions };
     let mut found = judge(&JudgeInput { report: r, facts: &facts, recent, open: &open });
     found.extend(projections(c, r, &open)?);
-    let observed = |s: &Subject| r.errors.is_empty() || reported(r, s);
+    let observed = |s: &Subject, code| r.errors.is_empty() || reported(r, s, code);
     evaluate::apply(c, &merge(found), &active, observed, at)
 }
 
@@ -123,10 +123,11 @@ fn projections(
 }
 
 /// Whether the report says anything about the subject (when a source failed, absent
-/// subjects are unknown rather than recovered).
-fn reported(r: &Report, s: &Subject) -> bool {
+/// subjects are unknown rather than recovered). A host-wide judgement over all containers
+/// needs every source.
+fn reported(r: &Report, s: &Subject, code: IncidentCode) -> bool {
     match s {
-        Subject::Host(_) => true,
+        Subject::Host(_) => code != IncidentCode::LogUnbounded,
         Subject::Mount { path, .. } => r.host_state.mounts.iter().any(|m| &m.path == path),
         Subject::Workload(k) => r.workloads.iter().any(|w| &w.key == k),
         Subject::Endpoint(_) => false,

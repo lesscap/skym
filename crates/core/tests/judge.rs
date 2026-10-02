@@ -5,7 +5,7 @@ use skym_core::model::{
     DatastoreProbe, ExceptionClass, ExceptionGroup, Health, LocalEvent, RunState,
 };
 use skym_core::report::Report;
-use skym_core::rules::{IncidentCode, Severity};
+use skym_core::rules::{Finding, IncidentCode, Severity};
 use skym_core::subject::{Subject, WorkloadKey};
 use skym_core::time::{SignedDuration, Timestamp};
 use skym_core::view::{IncidentView, Status, rollup, workload_summary};
@@ -27,7 +27,7 @@ struct Ctx {
     open: BTreeSet<(Subject, IncidentCode)>,
 }
 
-fn run(report: &Report, ctx: &Ctx) -> Vec<(Subject, IncidentCode, Severity)> {
+fn findings(report: &Report, ctx: &Ctx) -> Vec<Finding> {
     let facts = BTreeMap::new();
     let input = JudgeInput {
         report,
@@ -35,7 +35,11 @@ fn run(report: &Report, ctx: &Ctx) -> Vec<(Subject, IncidentCode, Severity)> {
         recent: Recent { oom_events: &ctx.oom, exceptions: &ctx.exceptions },
         open: &ctx.open,
     };
-    judge(&input).into_iter().map(|f| (f.subject, f.code, f.severity)).collect()
+    judge(&input)
+}
+
+fn run(report: &Report, ctx: &Ctx) -> Vec<(Subject, IncidentCode, Severity)> {
+    findings(report, ctx).into_iter().map(|f| (f.subject, f.code, f.severity)).collect()
 }
 
 fn severity_of(report: &Report, ctx: &Ctx, code: IncidentCode) -> Option<Severity> {
@@ -171,9 +175,54 @@ fn log_unbounded_uses_known_facts_when_omitted() {
         recent: Recent { oom_events: &ctx.oom, exceptions: &ctx.exceptions },
         open: &ctx.open,
     };
-    assert!(judge(&input).iter().any(|f| f.code == IncidentCode::LogUnbounded));
     // the postgres workload uses the `local` driver without max-size: rotated by default
-    assert!(!judge(&input).iter().any(|f| f.subject == Subject::Workload(key(PG))));
+    let found: Vec<_> =
+        judge(&input).into_iter().filter(|f| f.code == IncidentCode::LogUnbounded).collect();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].subject, Subject::Host(r.host.clone()));
+    assert_eq!(
+        found[0].detail,
+        format!(
+            "1 container logs to json-file without max-size: {}/{}",
+            key(APP).project,
+            key(APP).service
+        )
+    );
+}
+
+#[test]
+fn log_unbounded_is_one_finding_per_host_naming_five() {
+    let mut r = base();
+    let template = r.workloads[APP].clone();
+    r.workloads = (1..=7)
+        .map(|i| {
+            let mut w = template.clone();
+            w.key.service = format!("s{i}");
+            if i == 1 {
+                w.key.project = "-".into(); // a container outside compose
+            }
+            w.facts.as_mut().unwrap().log_max_size = None;
+            w
+        })
+        .collect();
+    let found = severity_of(&r, &Ctx::default(), IncidentCode::LogUnbounded);
+    assert_eq!(found, Some(Severity::Warn));
+    let detail = findings(&r, &Ctx::default())
+        .into_iter()
+        .find(|f| f.code == IncidentCode::LogUnbounded)
+        .unwrap()
+        .detail;
+    let p = &template.key.project;
+    assert_eq!(
+        detail,
+        format!(
+            "7 containers log to json-file without max-size: s1, {p}/s2, {p}/s3, {p}/s4, {p}/s5 and 2 more"
+        )
+    );
+    for w in &mut r.workloads {
+        w.facts.as_mut().unwrap().log_max_size = Some("10m".into());
+    }
+    assert_eq!(severity_of(&r, &Ctx::default(), IncidentCode::LogUnbounded), None);
 }
 
 #[test]
@@ -317,6 +366,6 @@ fn at_most_one_finding_per_subject_and_code() {
     let found = run(&r, &Ctx::default());
     let unique: BTreeSet<_> = found.iter().map(|(s, c, _)| (s.clone(), *c)).collect();
     assert_eq!(unique.len(), found.len());
-    // 3 workloads × 6 workload rules + 1 mount
-    assert_eq!(found.len(), 19);
+    // 3 workloads × 5 workload rules + 1 mount + 1 host-wide LOG_UNBOUNDED
+    assert_eq!(found.len(), 17);
 }

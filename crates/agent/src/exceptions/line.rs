@@ -60,7 +60,12 @@ pub fn classify(text: &str, stream: Stream) -> Line {
     let trimmed = text.trim_start();
     if trimmed.starts_with('{') && text.contains("\"skym\"") {
         return match serde_json::from_str::<Marked>(trimmed) {
-            Err(_) => Line::Marked(protocol_error()),
+            Err(_) if serde_json::from_str::<serde_json::Value>(trimmed).is_err() => {
+                Line::Marked(protocol_error("not valid JSON"))
+            }
+            Err(_) => Line::Marked(protocol_error(
+                "wrong field type or repeated field: final is a boolean, the others are strings",
+            )),
             Ok(m) => match m.skym.as_deref() {
                 Some("exception") => Line::Marked(record(m).unwrap_or_else(protocol_error)),
                 Some(_) => Line::Ignored,
@@ -91,15 +96,22 @@ fn unmarked(text: &str, stream: Stream) -> Line {
     }
 }
 
-fn record(m: Marked) -> Option<Record> {
-    let class = match m.class.as_deref()? {
-        "application" => ExceptionClass::Application,
-        "business" => ExceptionClass::Business,
-        _ => return None,
+/// A protocol line, or why it is not one (fixed wording: line content never leaves the host).
+fn record(m: Marked) -> Result<Record, &'static str> {
+    let class = match m.class.as_deref() {
+        Some("application") => ExceptionClass::Application,
+        Some("business") => ExceptionClass::Business,
+        _ => return Err("class must be application or business"),
     };
-    let component = m.component.filter(|c| COMPONENT.is_match(c))?;
-    let code = m.code.filter(|c| CODE.is_match(c))?;
-    Some(Record {
+    let component = m
+        .component
+        .filter(|c| COMPONENT.is_match(c))
+        .ok_or("component must match [a-z0-9_.-], at most 64 characters")?;
+    let code = m
+        .code
+        .filter(|c| CODE.is_match(c))
+        .ok_or("code must be UPPER_SNAKE, at most 64 characters")?;
+    Ok(Record {
         class,
         component,
         code,
@@ -111,12 +123,12 @@ fn record(m: Marked) -> Option<Record> {
     })
 }
 
-fn protocol_error() -> Record {
+fn protocol_error(reason: &str) -> Record {
     Record {
         class: ExceptionClass::Application,
         component: "_skym".into(),
         code: "_PROTOCOL_ERROR".into(),
-        message: None,
+        message: Some(reason.to_string()),
         biz_key: None,
         is_final: true,
         exception_type: None,

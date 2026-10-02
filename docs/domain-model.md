@@ -160,7 +160,7 @@ now − host.last_seen > 3 × report_interval ⇒ open Incident { subject: host,
 | `CRASH_LOOP` | Workload | Restart count grows faster than a threshold |
 | `OOM_KILLED` | Host or Workload | Kernel OOM kill |
 | `DISK_FILLING` | Mount | A mount is nearly full, or projected to fill up soon |
-| `LOG_UNBOUNDED` | Workload | `json-file` log driver without a size limit |
+| `LOG_UNBOUNDED` | Host | Containers on the `json-file` log driver without a size limit, listed in the detail |
 | `DATASTORE_UNREACHABLE` | Workload (Datastore) | A discovered database does not answer a local probe |
 | `REPLICATION_LAG` | Workload (Datastore) | Postgres standby lags behind |
 | `ENDPOINT_DOWN` | Endpoint | 5xx or timeout from an external probe |

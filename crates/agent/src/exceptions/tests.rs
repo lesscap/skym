@@ -64,6 +64,33 @@ fn malformed_marked_lines_are_protocol_errors_and_unknown_kinds_are_ignored() {
 }
 
 #[test]
+fn a_protocol_error_says_what_is_wrong_without_echoing_the_line() {
+    let cases = [
+        (r#"{"skym": "exception", broken"#, "not valid JSON"),
+        (r#"{"skym":1,"class":"application"}"#, "wrong field type"),
+        (
+            r#"{"skym":"exception","class":"x","class":"application","component":"a","code":"X"}"#,
+            "wrong field type or repeated field",
+        ),
+        (r#"{"skym":"exception","component":"a","code":"X"}"#, "class must be"),
+        (
+            r#"{"skym":"exception","class":"business","component":"Bad Name","code":"X"}"#,
+            "component must",
+        ),
+        (
+            r#"{"skym":"exception","class":"application","component":"a","code":"secret-9"}"#,
+            "code must",
+        ),
+    ];
+    for (line, reason) in cases {
+        let groups = group(&[(OUT, line)], Detail::Local);
+        let message = &groups[0].sample.as_ref().unwrap().message;
+        assert!(message.starts_with(reason), "{line}: {message}");
+        assert!(!message.contains("secret") && !message.contains("Bad Name"), "{message}");
+    }
+}
+
+#[test]
 fn stderr_fallback_keeps_error_like_records_with_their_stack() {
     let input = [
         (ERR, "INFO 2026-10-01 worker started, 0 errors so far"),

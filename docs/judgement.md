@@ -55,7 +55,7 @@ N and M count reports, not minutes: the times below assume the default 60-second
 | `CRASH_LOOP` | ≥ 3 crash restarts within an hour | warn; critical at ≥ 10 | No restart for 30 minutes |
 | `OOM_KILLED` | An OOM kill within the last hour | warn; critical at ≥ 3 in an hour | No OOM kill for an hour |
 | `DISK_FILLING` | Used ≥ 85% (space or inodes), or projected full within 7 days | critical at ≥ 92% or projected full within 24 hours | Used below threshold − 3 points and projection beyond 7 days |
-| `LOG_UNBOUNDED` | `json-file` log driver without `max-size` (the `local` driver rotates by default) | warn | A size limit is configured |
+| `LOG_UNBOUNDED` | Any container uses the `json-file` log driver without `max-size` (the `local` driver rotates by default). One incident per host, naming the containers | warn | Every container has a size limit |
 | `DATASTORE_UNREACHABLE` | Local probe fails twice in a row | critical | Probe succeeds twice in a row |
 | `REPLICATION_LAG` | Lag > 30 seconds | critical at > 5 minutes | Lag < 10 seconds for 5 minutes |
 | `ENDPOINT_DOWN` (planned) | 2 consecutive probes return 5xx, time out (10 s) or fail to connect | critical; warn for 4xx other than 401, 403, 404 | 2 consecutive good probes |
@@ -86,7 +86,7 @@ code = "DISK_FILLING"
 until = "2026-12-31T00:00:00Z"
 ```
 
-`subject` is a subject string as the API returns it (`host:x`, `workload:x/project/service`, `mount:x:/path`); `until` is an RFC 3339 time.
+`subject` is a subject string as the API returns it (`host:x`, `workload:x/project/service`, `mount:x:/path`); `until` is an RFC 3339 time. Host-wide codes such as `LOG_UNBOUNDED` are muted on `host:x`, which also covers containers added later.
 
 ```text
 muted(incident) ⇔ ∃ m ∈ mute: m.subject = incident.subject

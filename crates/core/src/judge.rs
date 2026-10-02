@@ -40,18 +40,21 @@ pub fn judge(input: &JudgeInput) -> Vec<Finding> {
     let report = input.report;
     let workloads = report.workloads.iter().flat_map(|w| workload(input, w));
     let mounts = report.host_state.mounts.iter().filter_map(|m| disk(input, m));
-    workloads.chain(mounts).chain(oom(input)).chain(app_exceptions(input)).collect()
+    workloads
+        .chain(mounts)
+        .chain(oom(input))
+        .chain(log_unbounded(input))
+        .chain(app_exceptions(input))
+        .collect()
 }
 
 fn workload(input: &JudgeInput, w: &WorkloadReport) -> Vec<Finding> {
     let subject = &Subject::Workload(w.key.clone());
-    let facts = w.facts.as_ref().or_else(|| input.facts.get(&w.key));
     let state = &w.state;
     [
         down(subject, state),
         unhealthy(subject, state),
         crash_loop(subject, state, input),
-        log_unbounded(subject, facts),
         datastore_unreachable(subject, state),
         replication_lag(subject, state, input),
     ]
@@ -102,12 +105,39 @@ fn crash_loop(subject: &Subject, state: &WorkloadState, input: &JudgeInput) -> O
 }
 
 /// The `local` driver rotates by default; only `json-file` grows without a limit.
-fn log_unbounded(subject: &Subject, facts: Option<&WorkloadFacts>) -> Option<Finding> {
-    let facts = facts?;
-    let unbounded =
-        facts.log_driver.as_deref() == Some("json-file") && facts.log_max_size.is_none();
-    let detail = "json-file log driver without max-size".to_string();
-    unbounded.then(|| finding(subject, IncidentCode::LogUnbounded, Severity::Warn, detail))
+/// One finding per host: unbounded logs are fixed host by host, and one warning per
+/// container would bury everything else.
+fn log_unbounded(input: &JudgeInput) -> Option<Finding> {
+    let unbounded: Vec<String> = input
+        .report
+        .workloads
+        .iter()
+        .filter(|w| {
+            let facts = w.facts.as_ref().or_else(|| input.facts.get(&w.key));
+            facts.is_some_and(|f| {
+                f.log_driver.as_deref() == Some("json-file") && f.log_max_size.is_none()
+            })
+        })
+        .map(|w| match w.key.project.as_str() {
+            "-" => w.key.service.clone(),
+            project => format!("{project}/{}", w.key.service),
+        })
+        .collect();
+    if unbounded.is_empty() {
+        return None;
+    }
+    let more = unbounded.len().saturating_sub(5);
+    let names = unbounded.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    let detail = format!(
+        "{} to json-file without max-size: {names}{}",
+        match unbounded.len() {
+            1 => "1 container logs".to_string(),
+            n => format!("{n} containers log"),
+        },
+        if more > 0 { format!(" and {more} more") } else { String::new() }
+    );
+    let host = Subject::Host(input.report.host.clone());
+    Some(finding(&host, IncidentCode::LogUnbounded, Severity::Warn, detail))
 }
 
 fn datastore_unreachable(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
