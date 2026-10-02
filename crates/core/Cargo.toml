@@ -4,6 +4,7 @@ description = "Protocol types and judgement rules shared by skym and skym-server
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

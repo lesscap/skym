@@ -26,4 +26,4 @@ Early design. Nothing is usable yet.
 
 ## License
 
-TBD
+[MIT](LICENSE)
