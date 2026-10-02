@@ -1,0 +1,6 @@
+# The Rust used locally and in CI. Bump deliberately; new lints then show up in one place.
+[toolchain]
+channel = "1.99"
+components = ["rustfmt", "clippy"]
+# Release binaries are static Linux builds (cargo zigbuild).
+targets = ["x86_64-unknown-linux-musl"]
