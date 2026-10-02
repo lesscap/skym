@@ -69,7 +69,7 @@ In Rust: no `deny_unknown_fields`, `#[serde(default)]` on fields added later, `#
 
 ## Application signals
 
-Applications report exceptions by writing one structured JSON line to stdout or stderr, marked with a `skym` field that carries the protocol version. `skym` reads container logs incrementally through the Docker API, parses marked lines, and groups them by `(workload, component, code)`. Unmarked lines on stderr are used as a fallback signal for crashes and unhandled errors.
+Applications report exceptions by writing one structured JSON line to stdout or stderr, marked with a `skym` field. `skym` reads container logs incrementally through the Docker API, parses marked lines, and groups them by `(workload, component, code)`. Unmarked lines on stderr are used as a fallback signal for crashes and unhandled errors.
 
 Applications do not depend on `skym`: no SDK, no socket, no endpoint to expose. If `skym` is missing or down, the application is unaffected.
 

@@ -1,0 +1,135 @@
+{
+  "host": "x",
+  "ts": "2026-10-01T12:00:00Z",
+  "host_facts_hash": "0123456789abcdef",
+  "host_facts": {
+    "hostname": "x",
+    "os": "Ubuntu 24.04",
+    "kernel": "6.8.0-45-generic",
+    "arch": "x86_64",
+    "cpu_count": 8,
+    "memory_total_bytes": 34359738368,
+    "boot_time": "2026-09-01T00:00:00Z",
+    "docker_version": "27.3.1",
+    "agent_version": "0.1.0",
+    "mounts": [{ "path": "/", "fs_type": "ext4" }],
+    "public_ip": null
+  },
+  "host_state": {
+    "load_1m": 0.5,
+    "load_5m": 0.4,
+    "load_15m": 0.3,
+    "memory_used_bytes": 8589934592,
+    "mounts": [
+      {
+        "path": "/",
+        "total_bytes": 100000000000,
+        "used_bytes": 50000000000,
+        "inodes_total": 6000000,
+        "inodes_used": 600000
+      }
+    ],
+    "transient_containers": { "running": 1, "exited": 3 }
+  },
+  "workloads": [
+    {
+      "key": { "host": "x", "project": "captain", "service": "api" },
+      "facts_hash": "1111111111111111",
+      "facts": {
+        "kind": "app",
+        "datastore": null,
+        "image": "registry.example.com/captain:1.4.2",
+        "image_digest": "sha256:aaaa",
+        "created": "2026-09-30T08:00:00Z",
+        "restart_policy": "unless-stopped",
+        "ports": ["0.0.0.0:4001->4001/tcp"],
+        "memory_limit_bytes": 1073741824,
+        "labels": {
+          "com.docker.compose.project": "captain",
+          "com.docker.compose.service": "api"
+        },
+        "healthcheck": true,
+        "log_driver": "json-file",
+        "log_max_size": "10m"
+      },
+      "state": {
+        "run": "running",
+        "exit_code": null,
+        "health": "healthy",
+        "restarts": [],
+        "memory_used_bytes": 268435456,
+        "missing_ports": [],
+        "datastore": null
+      }
+    },
+    {
+      "key": { "host": "x", "project": "pg", "service": "main" },
+      "facts_hash": "2222222222222222",
+      "facts": {
+        "kind": "datastore",
+        "datastore": "postgres",
+        "image": "postgres:16-alpine",
+        "image_digest": null,
+        "created": "2026-08-01T00:00:00Z",
+        "restart_policy": "always",
+        "ports": [],
+        "memory_limit_bytes": null,
+        "labels": {},
+        "healthcheck": false,
+        "log_driver": "local",
+        "log_max_size": null
+      },
+      "state": {
+        "run": "running",
+        "exit_code": null,
+        "health": null,
+        "restarts": [],
+        "memory_used_bytes": null,
+        "missing_ports": [],
+        "datastore": { "reachable": true, "detail": "ok", "replication_lag_s": 2.0 }
+      }
+    },
+    {
+      "key": { "host": "x", "project": "_systemd", "service": "xray" },
+      "facts_hash": "3333333333333333",
+      "facts": {
+        "kind": "proxy",
+        "datastore": null,
+        "image": "xray",
+        "image_digest": null,
+        "created": null,
+        "restart_policy": null,
+        "ports": [],
+        "memory_limit_bytes": null,
+        "labels": {},
+        "healthcheck": false,
+        "log_driver": null,
+        "log_max_size": null
+      },
+      "state": {
+        "run": "running",
+        "exit_code": null,
+        "health": null,
+        "restarts": [],
+        "memory_used_bytes": null,
+        "missing_ports": [],
+        "datastore": null
+      }
+    }
+  ],
+  "local_events": [],
+  "exceptions": [
+    {
+      "workload": { "host": "x", "project": "captain", "service": "api" },
+      "class": "business",
+      "component": "win",
+      "code": "SOURCE_MISSING",
+      "count": 31,
+      "final_count": 31,
+      "first_seen": "2026-10-01T11:59:01Z",
+      "last_seen": "2026-10-01T11:59:58Z",
+      "biz_keys": ["notice:1", "notice:2"],
+      "sample": null
+    }
+  ]
+}

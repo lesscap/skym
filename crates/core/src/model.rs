@@ -1,0 +1,210 @@
+//! Facts, state, events and exception groups. Every type tolerates unknown fields,
+//! and every enum that crosses the wire maps unknown values to `Unknown`.
+
+use crate::subject::{Subject, WorkloadKey};
+use crate::time::Timestamp;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct HostFacts {
+    pub hostname: String,
+    pub os: String,
+    pub kernel: String,
+    pub arch: String,
+    pub cpu_count: u32,
+    pub memory_total_bytes: u64,
+    pub boot_time: Timestamp,
+    pub docker_version: Option<String>,
+    pub agent_version: String,
+    #[serde(default)]
+    pub mounts: Vec<MountFacts>,
+    pub public_ip: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct MountFacts {
+    pub path: String,
+    pub fs_type: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct HostState {
+    pub load_1m: f64,
+    pub load_5m: f64,
+    pub load_15m: f64,
+    pub memory_used_bytes: u64,
+    #[serde(default)]
+    pub mounts: Vec<MountState>,
+    #[serde(default)]
+    pub transient_containers: TransientCounts,
+}
+
+/// Sizes live in state, not facts, so every report can be judged on its own.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct MountState {
+    pub path: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub inodes_total: u64,
+    pub inodes_used: u64,
+}
+
+/// Containers that are not workloads (no restart policy, not in compose).
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct TransientCounts {
+    pub running: u32,
+    pub exited: u32,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkloadKind {
+    App,
+    Datastore,
+    Proxy,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DatastoreKind {
+    Postgres,
+    Redis,
+    Mysql,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct WorkloadFacts {
+    pub kind: WorkloadKind,
+    pub datastore: Option<DatastoreKind>,
+    pub image: String,
+    pub image_digest: Option<String>,
+    pub created: Option<Timestamp>,
+    pub restart_policy: Option<String>,
+    #[serde(default)]
+    pub ports: Vec<String>,
+    pub memory_limit_bytes: Option<u64>,
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+    #[serde(default)]
+    pub healthcheck: bool,
+    pub log_driver: Option<String>,
+    pub log_max_size: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    Running,
+    Restarting,
+    Paused,
+    Exited,
+    Dead,
+    Created,
+    Inactive,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Health {
+    Healthy,
+    Unhealthy,
+    Starting,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct WorkloadState {
+    pub run: RunState,
+    pub exit_code: Option<i64>,
+    pub health: Option<Health>,
+    /// Crash restarts within the last hour, at most 100.
+    #[serde(default)]
+    pub restarts: Vec<Timestamp>,
+    pub memory_used_bytes: Option<u64>,
+    /// systemd units: declared ports that are not listening.
+    #[serde(default)]
+    pub missing_ports: Vec<u16>,
+    pub datastore: Option<DatastoreProbe>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct DatastoreProbe {
+    pub reachable: bool,
+    pub detail: String,
+    pub replication_lag_s: Option<f64>,
+}
+
+/// Events only visible on the host.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LocalEvent {
+    OomKilled {
+        ts: Timestamp,
+        workload: Option<WorkloadKey>,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EventKind {
+    Deployed {
+        from: String,
+        to: String,
+    },
+    ConfigChanged,
+    Restarted,
+    OomKilled,
+    HostRebooted,
+    KernelChanged,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct Event {
+    pub ts: Timestamp,
+    pub subject: Subject,
+    pub kind: EventKind,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExceptionClass {
+    Application,
+    Business,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct ExceptionGroup {
+    pub workload: WorkloadKey,
+    pub class: ExceptionClass,
+    pub component: String,
+    pub code: String,
+    pub count: u32,
+    pub final_count: u32,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
+    #[serde(default)]
+    pub biz_keys: Vec<String>,
+    pub sample: Option<ExceptionSample>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct ExceptionSample {
+    pub message: String,
+    pub exception_type: Option<String>,
+    pub stacktrace: Option<String>,
+}

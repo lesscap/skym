@@ -1,0 +1,58 @@
+{
+  "host": "x",
+  "ts": "2026-10-01T12:00:00Z",
+  "host_facts_hash": "0123456789abcdef",
+  "host_facts": null,
+  "added_later": { "anything": true },
+  "host_state": {
+    "load_1m": 0.5,
+    "load_5m": 0.4,
+    "load_15m": 0.3,
+    "memory_used_bytes": 1,
+    "pressure": 0.1,
+    "mounts": []
+  },
+  "workloads": [
+    {
+      "key": { "host": "x", "project": "q", "service": "broker" },
+      "facts_hash": "4444444444444444",
+      "facts": {
+        "kind": "queue",
+        "datastore": "mongo",
+        "image": "nats:2",
+        "image_digest": null,
+        "created": null,
+        "restart_policy": "always",
+        "memory_limit_bytes": null,
+        "log_driver": "json-file",
+        "log_max_size": "10m",
+        "gpu": "none"
+      },
+      "state": {
+        "run": "frozen",
+        "exit_code": null,
+        "health": "degraded",
+        "memory_used_bytes": null,
+        "datastore": null,
+        "cpu_throttled": 3
+      }
+    }
+  ],
+  "local_events": [
+    { "type": "disk_error", "ts": "2026-10-01T11:58:00Z", "device": "sda" }
+  ],
+  "exceptions": [
+    {
+      "workload": { "host": "x", "project": "q", "service": "broker" },
+      "class": "audit",
+      "component": "auth",
+      "code": "LOGIN",
+      "count": 1,
+      "final_count": 1,
+      "first_seen": "2026-10-01T11:59:00Z",
+      "last_seen": "2026-10-01T11:59:00Z",
+      "sample": null,
+      "trace_id": "abc"
+    }
+  ]
+}

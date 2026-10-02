@@ -6,7 +6,14 @@ How reports become findings and findings become incidents. Incident codes and en
 
 ```rust
 // crates/core — pure, no I/O, shared by `skym` and `skym-server`
-fn judge(report: &Report) -> Vec<Finding>
+fn judge(input: &JudgeInput) -> Vec<Finding>
+
+struct JudgeInput<'a> {
+    report: &'a Report,                                // its `ts` is the reference time
+    facts: &'a BTreeMap<WorkloadKey, WorkloadFacts>,   // for workloads whose report omits facts
+    recent: Recent<'a>,                                // OOM kills (1 h), exception groups (15 min)
+    open: &'a BTreeSet<(Subject, IncidentCode)>,       // selects resolve thresholds
+}
 
 struct Finding {
     subject: Subject,
@@ -22,7 +29,7 @@ fn evaluate(findings: &[Finding], store: &Store, now: Timestamp) -> Vec<Incident
 - `skym status` on a host runs `judge` only: what is wrong at this moment.
 - `skym-server` adds time: opening, resolving and reopening incidents, plus findings only it can make (lost heartbeats, disk growth projection, external endpoint and TLS probes).
 
-Rules that need a short history are computed by `skym` on the host and reported as state, so `judge` stays pure. For example, `skym` counts restarts from the Docker events stream and reports `restarts_1h`.
+Rules that need a short history get it as input, so `judge` stays pure: `skym` reports the times of crash restarts within the last hour as workload state, and the caller passes recent OOM kills and exception groups. Locally, `skym status` collects them in the same pass; on the server, they come from the store.
 
 ## Incident lifecycle
 
@@ -42,10 +49,10 @@ numeric thresholds use hysteresis: open at X, resolve below X − δ
 | `HEARTBEAT_LOST` | No report for 3 intervals (3 minutes by default) | critical | A report arrives |
 | `WORKLOAD_DOWN` | Not running in 2 consecutive reports; `Exited (0)` does not count | critical | Running in 2 consecutive reports |
 | `WORKLOAD_UNHEALTHY` | Unhealthy in 2 consecutive reports | critical; warn after 24 hours open | Healthy in 2 consecutive reports |
-| `CRASH_LOOP` | `restarts_1h` ≥ 3 | warn; critical at ≥ 10 | No restart for 30 minutes |
+| `CRASH_LOOP` | ≥ 3 crash restarts within an hour | warn; critical at ≥ 10 | No restart for 30 minutes |
 | `OOM_KILLED` | An OOM kill within the last hour | warn; critical at ≥ 3 in an hour | No OOM kill for an hour |
 | `DISK_FILLING` | Used ≥ 85% (space or inodes), or projected full within 7 days | critical at ≥ 92% or projected full within 24 hours | Used below threshold − 3 points and projection beyond 7 days |
-| `LOG_UNBOUNDED` | Log driver has no `max-size` | warn | A size limit is configured |
+| `LOG_UNBOUNDED` | `json-file` log driver without `max-size` (the `local` driver rotates by default) | warn | A size limit is configured |
 | `DATASTORE_UNREACHABLE` | Local probe fails twice in a row | critical | Probe succeeds twice in a row |
 | `REPLICATION_LAG` | Lag > 30 seconds | critical at > 5 minutes | Lag < 10 seconds for 5 minutes |
 | `ENDPOINT_DOWN` | 2 consecutive probes return 5xx, time out (10 s) or fail to connect | critical; warn for 4xx other than 401, 403, 404 | 2 consecutive good probes |

@@ -21,7 +21,7 @@ Content-Encoding: gzip
 struct Report {
     host: HostId,
     ts: Timestamp,                     // collection time on the host
-    host_facts_hash: u64,
+    host_facts_hash: String,           // 16 hex characters
     host_facts: Option<HostFacts>,
     host_state: HostState,
     workloads: Vec<WorkloadReport>,
@@ -31,13 +31,17 @@ struct Report {
 
 struct WorkloadReport {
     key: WorkloadKey,
-    facts_hash: u64,
+    facts_hash: String,
     facts: Option<WorkloadFacts>,
     state: WorkloadState,
 }
 ```
 
 Entity fields are defined in the [domain model](domain-model.md).
+
+A facts hash is the first 8 bytes of SHA-256 over the facts' JSON form, written as 16 lowercase hex characters. A string keeps it exact for every JSON consumer.
+
+`skym` does not know its host id; it fills every host field (`host`, workload keys) with its hostname, and the server replaces them all with the host id bound to the token.
 
 ## When facts are sent
 

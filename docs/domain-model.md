@@ -34,8 +34,7 @@ struct Host {
 
 struct Workload {
     key: WorkloadKey,
-    kind: WorkloadKind,          // App | Datastore | Proxy
-    facts: WorkloadFacts,
+    facts: WorkloadFacts,        // kind: App | Datastore | Proxy, plus the datastore engine
     state: WorkloadState,
 }
 
@@ -54,8 +53,19 @@ struct Endpoint {
 ```text
 Customer 1─* Host 1─* Workload 1─* ExceptionGroup
 Endpoint *─? Workload
-Incident.subject ∈ Host ∪ Workload ∪ Endpoint
+Incident.subject ∈ Host ∪ Workload ∪ Mount ∪ Endpoint
 Event.subject    ∈ Host ∪ Workload
+```
+
+### Subjects
+
+Incidents and events point at a subject, written everywhere (API, configuration, storage) as one string:
+
+```text
+host:<host>                          host:i
+workload:<host>/<project>/<service>  workload:i/dify/weaviate
+mount:<host>:<path>                  mount:i:/data
+endpoint:<url>                       endpoint:https://vocra.io
 ```
 
 ### Workload identity
@@ -80,8 +90,8 @@ Each entity carries two groups of attributes.
 | | Facts | State |
 | --- | --- | --- |
 | Changes | Rarely | Every interval |
-| Host | hostname, OS, kernel, architecture, CPU count, memory total, mounts and sizes, Docker version, `skym` version, boot time | load, memory used, used space and inodes per mount, counts of short-lived containers |
-| Workload | image and digest, created time, restart policy, port mappings, memory limit, whitelisted labels, healthcheck defined, log driver options | run state, restart count, healthcheck result, memory used |
+| Host | hostname, OS, kernel, architecture, CPU count, memory total, mounts and file system types, Docker version, `skym` version, boot time | load, memory used, size, used space and inodes per mount, counts of short-lived containers |
+| Workload | kind and datastore engine, image and digest, created time, restart policy, port mappings, memory limit, whitelisted labels, healthcheck defined, log driver options | run state, crash restart times within the last hour, healthcheck result, memory used, datastore probe result |
 
 A change in facts produces an event:
 
@@ -98,8 +108,8 @@ host.facts.kernel             changed ⇒ KernelChanged
 enum EventKind {
     Deployed { from: String, to: String },
     ConfigChanged,
-    Restarted { count: u32 },
-    OomKilled { process: String },
+    Restarted,
+    OomKilled,
     HostRebooted,
     KernelChanged,
 }
@@ -138,8 +148,8 @@ now − host.last_seen > 3 × report_interval ⇒ open Incident { subject: host,
 | `WORKLOAD_UNHEALTHY` | Workload | Docker healthcheck reports unhealthy |
 | `CRASH_LOOP` | Workload | Restart count grows faster than a threshold |
 | `OOM_KILLED` | Host or Workload | Kernel OOM kill |
-| `DISK_FILLING` | Host | Projected time until a mount is full is below a threshold |
-| `LOG_UNBOUNDED` | Workload | Docker log driver has no size limit |
+| `DISK_FILLING` | Mount | A mount is nearly full, or projected to fill up soon |
+| `LOG_UNBOUNDED` | Workload | `json-file` log driver without a size limit |
 | `DATASTORE_UNREACHABLE` | Workload (Datastore) | A discovered database does not answer a local probe |
 | `REPLICATION_LAG` | Workload (Datastore) | Postgres standby lags behind |
 | `ENDPOINT_DOWN` | Endpoint | 5xx or timeout from an external probe |

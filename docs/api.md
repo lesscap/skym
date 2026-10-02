@@ -58,7 +58,7 @@ The server stores only token hashes and logs the reader `name` with each request
 
 ```json
 {
-  "ts": "2026-10-01T14:30:00+08:00",
+  "ts": "2026-10-01T06:30:00Z",
   "status": "critical",
   "customers": [
     {
@@ -73,8 +73,8 @@ The server stores only token hashes and logs the reader `name` with each request
             {
               "code": "CRASH_LOOP",
               "severity": "critical",
-              "subject": "dify/weaviate",
-              "opened_at": "2026-10-01T14:05:00+08:00",
+              "subject": "workload:i/dify/weaviate",
+              "opened_at": "2026-10-01T06:05:00Z",
               "open_for": "25m",
               "detail": "12 restarts in the last hour",
               "links": {
