@@ -24,7 +24,9 @@ WARN  /data             DISK_FILLING     87% used
 
 With `--json`, the output has the same shape as `GET /api/hosts/{host}` in the [query API](api.md), so an agent reads a host the same way locally and remotely.
 
-Findings that need history only the server has (lost heartbeats, disk growth projection, endpoint and TLS probes) do not appear locally.
+Findings that need history only the server has (lost heartbeats, disk growth projection, endpoint and TLS probes) do not appear locally. Crash restarts and container OOM kills come from Docker's event buffer, which keeps only the last 256 events, so locally they are a lower bound; a container that is crash-looping right now still shows as `WORKLOAD_DOWN` (restarting). Host-level OOM kills need a previous reading and are only reported by `skym agent`.
+
+Disk usage follows `df`: blocks reserved for root count neither as used nor as available.
 
 Exit codes follow the Nagios convention, so scripts and existing monitoring tools can use them directly:
 
@@ -33,11 +35,15 @@ Exit codes follow the Nagios convention, so scripts and existing monitoring tool
 | 0 | ok |
 | 1 | at least one warn |
 | 2 | at least one critical |
-| 3 | collection failed |
+| 3 | nothing could be collected |
+
+When some sources fail (for example, no access to the Docker socket), the errors go to stderr and the exit code is at least 1: a gap in what was observed never reads as healthy.
 
 ### `exceptions`
 
-The server cannot ask a host for more data, so details that are not reported are available here instead. Nothing printed by this command leaves the host, so it is not limited by report size or redaction: business groups include samples and stack traces are not truncated.
+The server cannot ask a host for more data, so details that are not reported are available here instead. Nothing printed by this command leaves the host, so it is not limited by report size: business groups include samples and stack traces are not truncated. Values that look like secrets are still redacted, since terminal output ends up in scrollback, tickets and chat.
+
+Each command reads at most the last 20,000 log lines per container; on a very busy container, older lines in the window are not counted.
 
 ### `report --dry-run`
 
@@ -87,11 +93,13 @@ Every check is read-only.
 | --- | --- | --- |
 | Containers | Docker API: list, inspect, events, logs | `docker` group |
 | Memory | cgroup files | nothing |
-| OOM kills | `oom_kill` counter in `/proc/vmstat` for the host; `State.OOMKilled` from inspect for the container | nothing |
-| Datastores | Docker healthcheck if defined; otherwise a connection from the host to the container's address, with credentials read locally from inspect | `docker` group |
+| OOM kills | Docker `oom` events and `State.OOMKilled` from inspect for containers; the `oom_kill` counter in `/proc/vmstat` for the host | `docker` group |
+| Datastores | A protocol handshake from the host to the container's address (Postgres SSLRequest, Redis `PING`, MySQL greeting), no credentials. Postgres replication lag is queried with credentials read locally from inspect | `docker` group |
 | systemd units | Unit state; listening sockets from `/proc/net/tcp*` | nothing |
 
 `skym` never runs `docker exec`. It does not execute anything inside containers.
+
+Every Docker call has a deadline. Reading logs tries `tail` first and falls back to `since` alone: some Docker versions (seen on 24.0) never return a `tail` read of certain json-file logs, while `since` alone scans large logs from the start.
 
 ## Running
 

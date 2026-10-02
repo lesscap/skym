@@ -84,7 +84,9 @@ A container is a workload only if it is meant to stay up:
 
 ```text
 is_workload(c) ⇔ c.restart_policy ∈ {always, unless-stopped, on-failure}
-               ∨ c belongs to a compose service
+               ∨ (c belongs to a compose service ∧ c is not a `compose run` one-off)
+
+several containers with one key (old and new during a redeploy) ⇒ keep the running one, then the newest
 
 workload absent from reports for 7 days ⇒ archived
 ```
@@ -99,7 +101,7 @@ Each entity carries two groups of attributes.
 | --- | --- | --- |
 | Changes | Rarely | Every interval |
 | Host | hostname, OS, kernel, architecture, CPU count, memory total, mounts and file system types, Docker version, `skym` version, boot time | load, memory used, size, used space and inodes per mount, counts of short-lived containers |
-| Workload | kind and datastore engine, image and digest, created time, restart policy, port mappings, memory limit, whitelisted labels, healthcheck defined, log driver options | run state, crash restart times within the last hour, healthcheck result, memory used, datastore probe result |
+| Workload | kind and datastore engine, image and image ID, created time, restart policy, port mappings, memory limit, whitelisted labels, healthcheck defined, log driver options | run state, crash restart times within the last hour, healthcheck result, memory used, datastore probe result |
 
 A change in facts produces an event:
 

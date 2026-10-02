@@ -1,0 +1,36 @@
+{
+  "Id": "4f1c2b3a",
+  "Created": "2026-09-30T08:00:00.123456789Z",
+  "Name": "/pg-main-1",
+  "Image": "sha256:1111aaaa",
+  "RestartCount": 0,
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "ExitCode": 0,
+    "OOMKilled": false,
+    "StartedAt": "2026-09-30T08:00:01Z",
+    "FinishedAt": "0001-01-01T00:00:00Z",
+    "Health": { "Status": "healthy", "FailingStreak": 0 }
+  },
+  "Config": {
+    "Image": "postgres:16-alpine",
+    "Env": ["POSTGRES_PASSWORD=hunter2", "POSTGRES_USER=app", "PATH=/usr/local/bin"],
+    "Labels": {
+      "com.docker.compose.project": "pg",
+      "com.docker.compose.service": "main",
+      "com.docker.compose.container-number": "1",
+      "com.docker.compose.oneoff": "False",
+      "traefik.http.middlewares.auth.basicauth.users": "admin:$apr1$secret"
+    },
+    "Healthcheck": { "Test": ["CMD-SHELL", "pg_isready -U app"] }
+  },
+  "HostConfig": {
+    "RestartPolicy": { "Name": "unless-stopped", "MaximumRetryCount": 0 },
+    "LogConfig": { "Type": "json-file", "Config": { "max-size": "10m", "max-file": "3" } },
+    "Memory": 1073741824,
+    "NetworkMode": "pg_default",
+    "PortBindings": { "5432/tcp": [{ "HostIp": "127.0.0.1", "HostPort": "65432" }] }
+  },
+  "NetworkSettings": { "Networks": { "pg_default": { "IPAddress": "172.18.0.2" } } }
+}

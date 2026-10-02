@@ -1,0 +1,15 @@
+{
+  "Id": "9e8d7c6b",
+  "Created": "2026-09-01T00:00:00Z",
+  "Name": "/legacy-worker",
+  "Image": "sha256:2222bbbb",
+  "State": {
+    "Status": "exited",
+    "Running": false,
+    "ExitCode": 137,
+    "OOMKilled": true,
+    "FinishedAt": "2026-10-01T11:50:00Z"
+  },
+  "Config": { "Image": "registry.example.com/team/worker:2.1@sha256:abcd", "Healthcheck": { "Test": ["NONE"] } },
+  "HostConfig": { "Memory": 0, "RestartPolicy": { "Name": "no" }, "LogConfig": { "Type": "json-file", "Config": {} } }
+}

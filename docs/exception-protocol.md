@@ -90,10 +90,19 @@ For each group and report interval, `skym` sends:
 
 ## Unmarked stderr lines
 
-Lines without the marker are not protocol lines. On stdout they are ignored. On stderr they are a fallback signal for crashes and errors the application did not report itself:
+Lines without the marker are not protocol lines. On stdout they are ignored. On stderr they are a fallback signal for crashes and errors the application did not report itself. Many runtimes write all their logs to stderr (Python's `logging` does by default), so only lines that look like a failure count:
 
 ```text
-lines starting with whitespace followed by "at " are joined to the previous line (stack traces)
+looks_like_error(line) ⇔ line matches (?i)(error|exception|panic|panicked|fatal|traceback|unhandled)\b
+                        ∧ line has no lower level: no logfmt/JSON level warn|info|debug|trace,
+                          and no INFO|DEBUG|TRACE|WARN|WARNING word within its first 40 characters
+
+an error-like line starts a record; following indented lines join it (stack traces);
+a Python traceback is one record: an error line logged right before it (logger.exception)
+  stays its message; otherwise its exception line (the first unindented line after the frames)
+  is the message; the exception line is the fingerprint; chained tracebacks ("During handling
+  of the above exception…") continue the record and the last exception names it;
+any other stderr line ends it
 fingerprint = hash(first line with numbers, hex strings, UUIDs and quoted text replaced)
 group_key   = (workload, application, "_stderr", "_UNSTRUCTURED:" + fingerprint[0..8])
 ```

@@ -1,0 +1,15 @@
+sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+udev /dev devtmpfs rw,nosuid,relatime,size=8131700k,nr_inodes=2032925,mode=755 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,noexec,relatime,size=1634592k,mode=755 0 0
+/dev/vda3 / ext4 rw,relatime,errors=remount-ro 0 0
+cgroup2 /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime,nsdelegate 0 0
+/dev/loop0 /snap/core20/2105 squashfs ro,nodev,relatime,errors=continue 0 0
+/dev/vda2 /boot/efi vfat rw,relatime,fmask=0077,dmask=0077 0 0
+/dev/vdb /srv/backup\040copy ext4 rw,relatime 0 0
+/dev/vdb /data ext4 rw,relatime 0 0
+overlay /data/docker/overlay2/a3387cd2437abe736b0f6f364147d4aad9645d1c3c23e4e8791a0517bb7a0d8d/merged overlay rw,relatime,lowerdir=/data/docker/overlay2/l/X:/data/docker/overlay2/l/Y 0 0
+nsfs /run/docker/netns/1b2c3d nsfs rw 0 0
+shm /data/docker/containers/0123/mounts/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0
+/dev/vdc /data/docker/volumes/big/_data ext4 rw,relatime 0 0
+nfs.example:/export /mnt/nfs nfs4 rw,relatime 0 0
