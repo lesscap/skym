@@ -35,6 +35,7 @@ pub fn host_view(report: &Report, mut findings: Vec<Finding>) -> HostView {
         state: Some(report.host_state.clone()),
         workloads,
         incidents,
+        errors: report.errors.clone(),
     }
 }
 
@@ -79,8 +80,7 @@ pub fn render(view: &HostView) -> String {
     let width = view.incidents.iter().map(|i| short(&i.subject).len()).max().unwrap_or(0);
     let rows = view.incidents.iter().map(|i| {
         let level = if i.severity == Severity::Critical { "CRIT" } else { "WARN" };
-        let code = serde_json::to_value(i.code).ok();
-        let code = code.as_ref().and_then(|c| c.as_str()).unwrap_or_default();
+        let code = i.code.as_str();
         format!("{level:<5} {:<width$}  {code:<22} {}", short(&i.subject), i.detail)
     });
     std::iter::once(format!("host {} · {summary}", view.id))

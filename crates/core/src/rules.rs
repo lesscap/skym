@@ -33,6 +33,70 @@ pub enum Severity {
     Critical,
 }
 
+impl IncidentCode {
+    pub const ALL: [IncidentCode; 12] = [
+        IncidentCode::HeartbeatLost,
+        IncidentCode::WorkloadDown,
+        IncidentCode::WorkloadUnhealthy,
+        IncidentCode::CrashLoop,
+        IncidentCode::OomKilled,
+        IncidentCode::DiskFilling,
+        IncidentCode::LogUnbounded,
+        IncidentCode::DatastoreUnreachable,
+        IncidentCode::ReplicationLag,
+        IncidentCode::EndpointDown,
+        IncidentCode::CertExpiring,
+        IncidentCode::AppExceptions,
+    ];
+
+    /// The wire name, as serialized.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            IncidentCode::HeartbeatLost => "HEARTBEAT_LOST",
+            IncidentCode::WorkloadDown => "WORKLOAD_DOWN",
+            IncidentCode::WorkloadUnhealthy => "WORKLOAD_UNHEALTHY",
+            IncidentCode::CrashLoop => "CRASH_LOOP",
+            IncidentCode::OomKilled => "OOM_KILLED",
+            IncidentCode::DiskFilling => "DISK_FILLING",
+            IncidentCode::LogUnbounded => "LOG_UNBOUNDED",
+            IncidentCode::DatastoreUnreachable => "DATASTORE_UNREACHABLE",
+            IncidentCode::ReplicationLag => "REPLICATION_LAG",
+            IncidentCode::EndpointDown => "ENDPOINT_DOWN",
+            IncidentCode::CertExpiring => "CERT_EXPIRING",
+            IncidentCode::AppExceptions => "APP_EXCEPTIONS",
+        }
+    }
+}
+
+impl std::str::FromStr for IncidentCode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL.into_iter().find(|c| c.as_str() == s).ok_or_else(|| format!("unknown code {s}"))
+    }
+}
+
+impl Severity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Severity::Warn => "warn",
+            Severity::Critical => "critical",
+        }
+    }
+}
+
+impl std::str::FromStr for Severity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "warn" => Ok(Severity::Warn),
+            "critical" => Ok(Severity::Critical),
+            _ => Err(format!("unknown severity {s}")),
+        }
+    }
+}
+
 /// What a rule found in one evaluation.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct Finding {

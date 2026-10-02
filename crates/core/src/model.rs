@@ -30,7 +30,7 @@ pub struct MountFacts {
     pub fs_type: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
 pub struct HostState {
     pub load_1m: f64,
     pub load_5m: f64,
@@ -187,6 +187,21 @@ pub enum EventKind {
     Unknown,
 }
 
+impl EventKind {
+    /// The wire `type` tag.
+    pub const fn tag(&self) -> &'static str {
+        match self {
+            EventKind::Deployed { .. } => "deployed",
+            EventKind::ConfigChanged => "config_changed",
+            EventKind::Restarted => "restarted",
+            EventKind::OomKilled => "oom_killed",
+            EventKind::HostRebooted => "host_rebooted",
+            EventKind::KernelChanged => "kernel_changed",
+            EventKind::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct Event {
     pub ts: Timestamp,
@@ -201,6 +216,29 @@ pub enum ExceptionClass {
     Business,
     #[serde(other)]
     Unknown,
+}
+
+impl ExceptionClass {
+    /// The wire name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ExceptionClass::Application => "application",
+            ExceptionClass::Business => "business",
+            ExceptionClass::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::str::FromStr for ExceptionClass {
+    type Err = String;
+
+    /// The inverse of `as_str`, `unknown` included: a class added later is stored as unknown.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        [ExceptionClass::Application, ExceptionClass::Business, ExceptionClass::Unknown]
+            .into_iter()
+            .find(|c| c.as_str() == s)
+            .ok_or_else(|| format!("unknown exception class {s}"))
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]

@@ -49,6 +49,17 @@ impl fmt::Display for SubjectError {
 
 impl std::error::Error for SubjectError {}
 
+impl Subject {
+    /// The host the subject belongs to; endpoints belong to none.
+    pub fn host(&self) -> Option<&HostId> {
+        match self {
+            Subject::Host(h) | Subject::Mount { host: h, .. } => Some(h),
+            Subject::Workload(k) => Some(&k.host),
+            Subject::Endpoint(_) => None,
+        }
+    }
+}
+
 impl fmt::Display for Subject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

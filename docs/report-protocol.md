@@ -13,6 +13,9 @@ Content-Encoding: gzip
 
 - The server identifies the host from the token. The `host` field in the body is informational and ignored for identity.
 - A report with an invalid or duplicate workload key is rejected with `400` (see [workload identity](domain-model.md#workload-identity)).
+- A report timed more than 10 minutes ahead of the server is rejected with `400`, and does not count as a heartbeat: a host clock that ran ahead would otherwise make every later report look old.
+- A report not newer than the host's last one (compared in whole seconds) is acknowledged and counts as a heartbeat, but changes nothing else. Replaying buffered reports is therefore safe.
+- At most 2 MiB compressed and 32 MiB decompressed.
 - The response only acknowledges receipt. It never carries instructions.
 - Default interval: 60 seconds.
 
@@ -28,6 +31,8 @@ struct Report {
     workloads: Vec<WorkloadReport>,
     local_events: Vec<LocalEvent>,     // events only visible on the host, e.g. OOM kills
     exceptions: Vec<ExceptionGroup>,   // groups observed since the previous report
+    errors: Vec<String>,               // sources that failed in this pass
+    agent_version: Option<String>,     // the reporting skym's version
 }
 
 struct WorkloadReport {
@@ -39,6 +44,8 @@ struct WorkloadReport {
 ```
 
 Entity fields are defined in the [domain model](domain-model.md).
+
+When a source fails (for example, no access to the Docker socket), the report lists it in `errors`. The server then treats subjects missing from the report as unknown, not as recovered: their incidents stay as they are.
 
 A facts hash is the first 8 bytes of SHA-256 over the facts' JSON form, written as 16 lowercase hex characters. A string keeps it exact for every JSON consumer.
 

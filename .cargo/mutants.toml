@@ -6,6 +6,8 @@ exclude_re = [
     "systemd.rs.*replace (collect|show) ->",
     "datastore.rs.*replace query_lag ->",
     "logs.rs.*(in|replace) read(_one|_tail)?\\b",
+    # Background loops of the server; what they call (heartbeat_once, maintain) is tested.
+    "tasks.rs.*\\bspawn\\b",
     "systemd.rs.* in collect\\b",
     # Equivalent: the rank ends with the container id, so `>` and `>=` differ only for the same container.
     "containers.rs.*replace > with >= in winners",
@@ -14,6 +16,7 @@ exclude_re = [
 ]
 # I/O wiring against Docker, /proc and the network.
 exclude_globs = [
+    "crates/server/src/main.rs",
     "crates/agent/src/main.rs",
     "crates/agent/src/commands.rs",
     "crates/agent/src/collect/mod.rs",

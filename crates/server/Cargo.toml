@@ -1,0 +1,37 @@
+[package]
+name = "skym-server"
+description = "skym-server: receives reports, keeps incidents, serves the query API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "skym-server"
+path = "src/main.rs"
+
+[dependencies]
+skym-core = { path = "../core" }
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.3"
+jiff.workspace = true
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
+toml = "1"
+tower-http = { version = "0.6", features = ["decompression-gzip", "limit", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+flate2 = "1"
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

@@ -23,3 +23,8 @@ unsafe_code = "forbid"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# For cargo-mutants (`--profile mutants`): no debug info, so each mutant links faster.
+[profile.mutants]
+inherits = "test"
+debug = false

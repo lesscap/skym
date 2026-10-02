@@ -42,6 +42,7 @@ fn older_peer_minimal_report_parses() {
     assert!(report.host_facts.is_none());
     assert!(report.workloads.is_empty() && report.local_events.is_empty());
     assert!(report.host_state.mounts.is_empty());
+    assert!(report.errors.is_empty(), "errors added later default to none");
 }
 
 #[test]
@@ -182,4 +183,73 @@ fn validate_rejects_invalid_and_duplicate_workloads() {
     for r in [in_workloads, in_events, in_exceptions] {
         assert_eq!(validate(&r), Err(ReportError::InvalidWorkloadKey(bad.clone())));
     }
+}
+
+#[test]
+fn code_and_severity_names_match_the_wire() {
+    use skym_core::rules::{IncidentCode, Severity};
+    for code in IncidentCode::ALL {
+        assert_eq!(serde_json::to_value(code).unwrap(), code.as_str());
+        assert_eq!(code.as_str().parse::<IncidentCode>(), Ok(code));
+    }
+    for severity in [Severity::Warn, Severity::Critical] {
+        assert_eq!(serde_json::to_value(severity).unwrap(), severity.as_str());
+        assert_eq!(severity.as_str().parse::<Severity>(), Ok(severity));
+    }
+    assert!("NOPE".parse::<IncidentCode>().is_err() && "info".parse::<Severity>().is_err());
+}
+
+#[test]
+fn timeline_entries_are_flat_and_events_keep_their_own_tag() {
+    use skym_core::model::EventKind;
+    use skym_core::view::{TimelineEntry, TimelineKind};
+    let entry = TimelineEntry {
+        ts: "2026-10-01T12:00:00Z".parse().unwrap(),
+        subject: "workload:x/app/api".parse().unwrap(),
+        entry: TimelineKind::Event {
+            event: EventKind::Deployed { from: "a".into(), to: "b".into() },
+        },
+    };
+    let json = serde_json::to_value(&entry).unwrap();
+    assert_eq!(json["type"], "event");
+    assert_eq!(json["event"]["type"], "deployed");
+    assert_eq!(serde_json::from_value::<TimelineEntry>(json).unwrap(), entry);
+    let future: TimelineEntry = serde_json::from_value(serde_json::json!({
+        "ts": "2026-10-01T12:00:00Z", "subject": "host:x", "type": "incident_snoozed"
+    }))
+    .unwrap();
+    assert_eq!(future.entry, TimelineKind::Unknown);
+}
+
+#[test]
+fn class_and_event_names_match_the_wire() {
+    use skym_core::model::EventKind;
+    for class in [ExceptionClass::Application, ExceptionClass::Business] {
+        assert_eq!(serde_json::to_value(class).unwrap(), class.as_str());
+    }
+    for class in [ExceptionClass::Application, ExceptionClass::Business, ExceptionClass::Unknown] {
+        assert_eq!(class.as_str().parse::<ExceptionClass>(), Ok(class));
+    }
+    assert!("audit".parse::<ExceptionClass>().is_err());
+    let kinds = [
+        EventKind::Deployed { from: "a".into(), to: "b".into() },
+        EventKind::ConfigChanged,
+        EventKind::Restarted,
+        EventKind::OomKilled,
+        EventKind::HostRebooted,
+        EventKind::KernelChanged,
+        EventKind::Unknown,
+    ];
+    for kind in kinds {
+        assert_eq!(serde_json::to_value(&kind).unwrap()["type"], kind.tag());
+    }
+}
+
+#[test]
+fn subjects_know_their_host() {
+    let host = |s: &str| s.parse::<Subject>().unwrap().host().cloned();
+    assert_eq!(host("host:x"), Some("x".into()));
+    assert_eq!(host("mount:x:/data"), Some("x".into()));
+    assert_eq!(host("workload:x/app/api"), Some("x".into()));
+    assert_eq!(host("endpoint:https://a.example"), None);
 }

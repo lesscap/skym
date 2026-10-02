@@ -19,15 +19,17 @@ Authorization: Bearer <reader token>
 
 Reader tokens are configured on the server. Every reader token sees all customers; there are several so that each person or agent has its own, can be told apart in the server log, and can be revoked alone.
 
-```yaml
-readers:
-  - name: alice
-    token_sha256: "…"
-  - name: ops-agent
-    token_sha256: "…"
+```toml
+[[readers]]
+name = "alice"
+token_sha256 = "…"
+
+[[readers]]
+name = "ops-agent"
+token_sha256 = "…"
 ```
 
-The server stores only token hashes and logs the reader `name` with each request. Host tokens can only call `POST /api/report`.
+`skym-server token` prints a new random token and the hash to configure. The server stores only token hashes and logs the reader `name` with each request. Host tokens can only call `POST /api/report`, and reader tokens cannot report.
 
 ## Endpoints
 
@@ -48,11 +50,19 @@ The server stores only token hashes and logs the reader `name` with each request
 
 | Endpoint | Parameters |
 | --- | --- |
-| `timeline` | `host`, `workload` (`project/service`), `since` (default `6h`) |
+| `timeline` | `host` (required), `workload` (`project/service`), `since` (default `6h`), `limit` |
 | `incidents` | `status` (`open` \| `resolved`, default `open`), `host`, `code`, `since`, `include_muted` (default `false`), `limit` |
-| `exceptions` | `host`, `workload`, `class` (`application` \| `business`), `since` (default `1h`), `limit` |
+| `exceptions` | `host` (required), `workload`, `class` (`application` \| `business`), `since` (default `1h`), `limit` |
 
-`since` takes a duration (`15m`, `6h`, `7d`) or an RFC 3339 timestamp.
+`since` takes a duration (`15m`, `6h`, `7d`) or an RFC 3339 timestamp; for resolved incidents it defaults to `24h`. `limit` defaults to 100, at most 1000.
+
+### Status
+
+`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Hosts are listed by urgency: critical, then unknown, then warn, then ok. Muted incidents are listed only with `include_muted=true` and never count towards a status.
+
+### Lists and timeline
+
+`incidents`, `exceptions` and `timeline` return `{ "incidents" | "exceptions" | "entries": [...], "truncated": bool }`. Timeline entries are flat, with a `type`: `incident_opened`, `incident_reopened`, `incident_resolved`, `severity_changed`, or `event` with the event under `event` (it carries its own `type`, such as `deployed`).
 
 ## Overview response
 

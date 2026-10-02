@@ -1,6 +1,6 @@
 use crate::collect::Collected;
 use jiff::Timestamp;
-use skym_core::model::{HostState, TransientCounts};
+use skym_core::model::HostState;
 use skym_core::report::{Report, WorkloadReport, facts_hash};
 
 /// A full report: every fact included. Without host data (e.g. `/proc` unreadable) the
@@ -8,12 +8,13 @@ use skym_core::report::{Report, WorkloadReport, facts_hash};
 pub fn build(c: &Collected, host: &str, now: Timestamp) -> Report {
     let (host_facts, host_state) = match &c.host {
         Some((facts, state)) => (Some(facts.clone()), state.clone()),
-        None => (None, empty_state()),
+        None => (None, HostState::default()),
     };
     let host_state = HostState { transient_containers: c.transient.clone(), ..host_state };
     Report {
         host: host.to_string(),
         ts: now,
+        agent_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         host_facts_hash: host_facts.as_ref().map(facts_hash).unwrap_or_default(),
         host_facts,
         host_state,
@@ -29,17 +30,7 @@ pub fn build(c: &Collected, host: &str, now: Timestamp) -> Report {
             .collect(),
         local_events: c.local_events.clone(),
         exceptions: c.exceptions.clone(),
-    }
-}
-
-fn empty_state() -> HostState {
-    HostState {
-        load_1m: 0.0,
-        load_5m: 0.0,
-        load_15m: 0.0,
-        memory_used_bytes: 0,
-        mounts: Vec::new(),
-        transient_containers: TransientCounts::default(),
+        errors: c.errors.clone(),
     }
 }
 
@@ -47,6 +38,7 @@ fn empty_state() -> HostState {
 mod tests {
     use super::*;
     use crate::collect::Workload;
+    use skym_core::model::TransientCounts;
     use skym_core::report::validate;
 
     fn collected() -> Collected {

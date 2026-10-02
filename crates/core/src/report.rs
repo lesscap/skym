@@ -24,6 +24,13 @@ pub struct Report {
     pub local_events: Vec<LocalEvent>,
     #[serde(default)]
     pub exceptions: Vec<ExceptionGroup>,
+    /// Sources that failed in this pass. Subjects missing from a report with errors
+    /// are unknown, not recovered.
+    #[serde(default)]
+    pub errors: Vec<String>,
+    /// The reporting `skym`'s version, in every report (host facts carry it only now and then).
+    #[serde(default)]
+    pub agent_version: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]

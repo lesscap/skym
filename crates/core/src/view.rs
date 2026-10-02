@@ -1,6 +1,9 @@
 //! JSON shapes shared by the query API and `skym status --json`.
 
-use crate::model::{HostFacts, HostState, RunState, WorkloadKind};
+use crate::model::{
+    Event, EventKind, ExceptionGroup, HostFacts, HostState, RunState, WorkloadFacts, WorkloadKind,
+    WorkloadState,
+};
 use crate::rules::{IncidentCode, Severity};
 use crate::subject::{CustomerId, HostId, Subject, WorkloadKey};
 use crate::time::Timestamp;
@@ -71,6 +74,114 @@ pub struct HostView {
     pub workloads: Vec<WorkloadSummary>,
     #[serde(default)]
     pub incidents: Vec<IncidentView>,
+    /// Sources that failed in the last pass.
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct HostOverview {
+    pub id: HostId,
+    pub status: Status,
+    pub last_report_ago: Option<String>,
+    #[serde(default)]
+    pub incidents: Vec<IncidentView>,
+    #[serde(default)]
+    pub links: BTreeMap<String, String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct CustomerOverview {
+    pub id: CustomerId,
+    pub name: String,
+    pub status: Status,
+    #[serde(default)]
+    pub hosts: Vec<HostOverview>,
+}
+
+/// `GET /api/overview`: where is something wrong right now.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct Overview {
+    pub ts: Timestamp,
+    pub status: Status,
+    #[serde(default)]
+    pub customers: Vec<CustomerOverview>,
+    #[serde(default)]
+    pub muted_count: u32,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct WorkloadView {
+    pub key: WorkloadKey,
+    pub status: Status,
+    pub facts: Option<WorkloadFacts>,
+    pub state: WorkloadState,
+    #[serde(default)]
+    pub incidents: Vec<IncidentView>,
+    #[serde(default)]
+    pub exceptions: Vec<ExceptionGroup>,
+    #[serde(default)]
+    pub events: Vec<Event>,
+    #[serde(default)]
+    pub links: BTreeMap<String, String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct IncidentList {
+    pub incidents: Vec<IncidentView>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct ExceptionList {
+    pub exceptions: Vec<ExceptionGroup>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// Incident changes and events, by time.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct Timeline {
+    pub entries: Vec<TimelineEntry>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct TimelineEntry {
+    pub ts: Timestamp,
+    pub subject: Subject,
+    #[serde(flatten)]
+    pub entry: TimelineKind,
+}
+
+/// `Event` names its field: `EventKind` carries its own `type` tag.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TimelineKind {
+    IncidentOpened {
+        code: IncidentCode,
+        severity: Severity,
+        detail: String,
+    },
+    IncidentReopened {
+        code: IncidentCode,
+        severity: Severity,
+        detail: String,
+    },
+    IncidentResolved {
+        code: IncidentCode,
+    },
+    SeverityChanged {
+        code: IncidentCode,
+        severity: Severity,
+    },
+    Event {
+        event: EventKind,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 /// Highest severity among unmuted incidents; `Ok` when there are none.

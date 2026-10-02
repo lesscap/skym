@@ -36,7 +36,7 @@ Rules that need a short history get it as input, so `judge` stays pure: `skym` r
 ```text
 open     ⇐ the rule matches in N consecutive evaluations
 resolve  ⇐ the rule does not match in M consecutive evaluations
-reopen   ⇐ the rule matches within 30 minutes after resolve → the same incident is reopened, not a new one
+reopen   ⇐ the rule matches N times again within 30 minutes after resolve → the same incident is reopened, not a new one
 severity ⇐ follows the latest finding (warn ↔ critical); the peak severity is kept
 
 numeric thresholds use hysteresis: open at X, resolve below X − δ
