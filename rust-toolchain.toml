@@ -3,4 +3,4 @@
 channel = "1.99"
 components = ["rustfmt", "clippy"]
 # Release binaries are static Linux builds (cargo zigbuild).
-targets = ["x86_64-unknown-linux-musl"]
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]

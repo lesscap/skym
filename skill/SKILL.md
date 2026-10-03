@@ -1,0 +1,28 @@
+---
+name: skym
+description: Check the health of the hosts, containers and applications monitored by skym. Use when asked how the servers are, what is wrong or broken, why something failed, or whether a deployment went well.
+---
+
+# skym
+
+`SKYM_URL` and `SKYM_TOKEN` come from the environment; if unset, read them from `~/.config/skym/env`.
+
+```sh
+curl -fsS -H "Authorization: Bearer $SKYM_TOKEN" "$SKYM_URL/api/overview"
+```
+
+`GET /api` lists every endpoint and its parameters.
+
+## How to read it
+
+1. Start at `/api/overview`. It holds every open, unmuted incident, most urgent host first.
+2. `HEARTBEAT_LOST` comes first: nothing else about that host is current. When the details say "all hosts silent", suspect the server or its network, not every host.
+3. Follow `links` to drill down (host → workload → timeline); never build URLs.
+4. `open_for` tells new problems from chronic ones; lead with new ones.
+5. Severity, thresholds and status are already judged: report them, do not re-derive them from raw numbers.
+6. Explain with the timeline: a `deployed` or `config_changed` event just before an incident is the first suspect.
+7. Exceptions: `/api/exceptions?host=…` groups failures by component and code; `business` ones are expected outcomes, not faults.
+
+On a monitored host itself, `skym status --json` and `skym exceptions` give the same view without the server, in more detail.
+
+Answer with what is wrong, since when, the likely cause, and what to look at next. Say so when everything is fine.

@@ -120,18 +120,6 @@ Every Docker call has a deadline. Reading logs tries `tail` first and falls back
 
 ## Running
 
-`skym agent` runs as a dedicated `skym` user under systemd (a packaged unit file comes with releases):
+`skym agent` runs as a dedicated `skym` user under systemd, with the unit in [`deploy/skym.service`](../deploy/skym.service). See [installation](install.md).
 
-```ini
-[Service]
-User=skym
-SupplementaryGroups=docker
-ExecStart=/usr/local/bin/skym agent
-ProtectSystem=strict
-ReadWritePaths=/var/lib/skym
-NoNewPrivileges=true
-PrivateTmp=true
-Restart=always
-```
-
-Releases will be static (musl) binaries for amd64 and arm64 with SHA-256 checksums, published on GitHub Releases. Until then, build from source with `cargo build --release`.
+Releases will be static (musl) binaries for amd64 and arm64 with SHA-256 checksums, published on GitHub Releases. Until then, build from source.

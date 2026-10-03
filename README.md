@@ -19,6 +19,8 @@ What makes it different:
 - [Judgement rules](docs/judgement.md)
 - [Query API](docs/api.md)
 - [skym CLI](docs/cli.md)
+- [Installation](docs/install.md)
+- [Skill for AI agents](skill/SKILL.md)
 
 ## Status
 

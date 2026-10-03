@@ -1,0 +1,17 @@
+listen = "0.0.0.0:7280"          # behind a reverse proxy that terminates TLS
+database = "/data/skym.db"
+report_interval = "60s"
+
+[[customers]]
+id = "acme"
+name = "Acme"
+
+# `skym-server token` prints a new token and the hash to put here.
+[[hosts]]
+id = "web-1"
+customer = "acme"
+token_sha256 = "<64 hex characters>"
+
+[[readers]]
+name = "ops-agent"
+token_sha256 = "<64 hex characters>"

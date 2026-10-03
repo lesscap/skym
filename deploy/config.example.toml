@@ -1,0 +1,13 @@
+# /etc/skym/config.toml
+server = "https://skym.example.com"
+token_file = "/etc/skym/token"       # mode 0600, owned by skym
+state_dir = "/var/lib/skym"          # created by systemd (StateDirectory=skym)
+interval = "60s"
+
+[docker]
+enabled = true
+exclude = []
+
+# [[systemd]]                        # services that do not run in Docker
+# unit = "xray"
+# ports = [443]
