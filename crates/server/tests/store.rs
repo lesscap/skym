@@ -60,6 +60,15 @@ fn a_replayed_report_still_proves_the_host_alive() {
 }
 
 #[test]
+fn a_host_is_first_seen_with_its_first_report() {
+    let mut c = db::open_in_memory().unwrap();
+    send(&mut c, &report(t0()), t0()).unwrap();
+    send(&mut c, &report(t0() + mins(1)), t0() + mins(1)).unwrap();
+    let row = hosts::get(&c, "x").unwrap().unwrap();
+    assert_eq!((row.first_seen, row.last_seen), (t0(), t0() + mins(1)));
+}
+
+#[test]
 fn reports_may_run_ten_minutes_ahead_and_no_more() {
     let mut c = db::open_in_memory().unwrap();
     assert!(send(&mut c, &report(t0() + mins(10)), t0()).is_ok());

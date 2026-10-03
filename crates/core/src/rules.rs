@@ -3,8 +3,8 @@ use crate::time::SignedDuration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Not extended with `Unknown`: codes never travel inside a report, and a typo in
-/// configuration should fail loudly.
+/// `Unknown` stands for a code a newer server added, for consumers of the API; the server
+/// never produces it, and its configuration rejects it (a typo there must fail loudly).
 #[derive(
     Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord,
 )]
@@ -22,15 +22,22 @@ pub enum IncidentCode {
     EndpointDown,
     CertExpiring,
     AppExceptions,
+    #[serde(other)]
+    Unknown,
 }
 
+/// Ordered by weight. `Info` is hygiene: an incident, but no reason to call a host unwell.
+/// `Unknown` is a severity a newer server added, ranked highest to stay on the safe side.
 #[derive(
     Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
+    Info,
     Warn,
     Critical,
+    #[serde(other)]
+    Unknown,
 }
 
 impl IncidentCode {
@@ -64,6 +71,7 @@ impl IncidentCode {
             IncidentCode::EndpointDown => "ENDPOINT_DOWN",
             IncidentCode::CertExpiring => "CERT_EXPIRING",
             IncidentCode::AppExceptions => "APP_EXCEPTIONS",
+            IncidentCode::Unknown => "UNKNOWN",
         }
     }
 }
@@ -79,6 +87,8 @@ impl std::str::FromStr for IncidentCode {
 impl Severity {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Severity::Unknown => "unknown",
+            Severity::Info => "info",
             Severity::Warn => "warn",
             Severity::Critical => "critical",
         }
@@ -90,6 +100,7 @@ impl std::str::FromStr for Severity {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "info" => Ok(Severity::Info),
             "warn" => Ok(Severity::Warn),
             "critical" => Ok(Severity::Critical),
             _ => Err(format!("unknown severity {s}")),
@@ -124,9 +135,8 @@ pub const fn rule(code: IncidentCode) -> Rule {
         WorkloadUnhealthy => (2, 2, Some(SignedDuration::from_hours(24))),
         ReplicationLag => (1, 5, None),
         AppExceptions => (1, 30, None),
-        HeartbeatLost | CrashLoop | OomKilled | DiskFilling | LogUnbounded | CertExpiring => {
-            (1, 1, None)
-        }
+        HeartbeatLost | CrashLoop | OomKilled | DiskFilling | LogUnbounded | CertExpiring
+        | Unknown => (1, 1, None),
     };
     Rule { open_after, resolve_after, decay_to_warn_after }
 }

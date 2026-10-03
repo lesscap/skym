@@ -16,6 +16,8 @@ pub struct HostRow {
     pub errors: Vec<String>,
     pub last_report_ts: Timestamp,
     pub last_seen: Timestamp,
+    /// When skym first heard from the host.
+    pub first_seen: Timestamp,
 }
 
 pub struct WorkloadRow {
@@ -25,7 +27,8 @@ pub struct WorkloadRow {
     pub last_seen: Timestamp,
 }
 
-const HOST_COLUMNS: &str = "id, facts_json, state_json, errors_json, last_report_ts, last_seen";
+const HOST_COLUMNS: &str = "id, facts_json, state_json, errors_json, last_report_ts, last_seen, \
+     COALESCE(first_seen, last_seen)";
 
 fn host_row(r: &rusqlite::Row) -> rusqlite::Result<HostRow> {
     Ok(HostRow {
@@ -35,6 +38,7 @@ fn host_row(r: &rusqlite::Row) -> rusqlite::Result<HostRow> {
         errors: from_json(&r.get::<_, String>(3)?)?,
         last_report_ts: parsed(r.get(4)?)?,
         last_seen: parsed(r.get(5)?)?,
+        first_seen: parsed(r.get(6)?)?,
     })
 }
 
@@ -55,8 +59,8 @@ pub fn touch(c: &Connection, id: &str, now: Timestamp) -> rusqlite::Result<()> {
 /// Stores the report's host part. Facts are kept when the report omits them.
 pub fn upsert(c: &Connection, r: &Report, now: Timestamp) -> rusqlite::Result<()> {
     c.execute(
-        "INSERT INTO hosts (id, facts_json, facts_hash, state_json, errors_json, last_report_ts, last_seen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO hosts (id, facts_json, facts_hash, state_json, errors_json, last_report_ts, last_seen, first_seen)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
          ON CONFLICT (id) DO UPDATE SET
            facts_json = COALESCE(excluded.facts_json, facts_json),
            facts_hash = COALESCE(excluded.facts_hash, facts_hash),

@@ -79,7 +79,8 @@ fn fact_change(old: &Stored, new: &WorkloadFacts, same_agent: bool) -> Option<Ev
         return Some(EventKind::Deployed { from, to });
     }
     let (Some(old), Some(new)) = (old.as_object(), new.as_object()) else { return None };
-    let changed = old.iter().any(|(k, v)| new.get(k).is_some_and(|n| n != v));
+    // Recreating a container with the same configuration only moves `created`.
+    let changed = old.iter().any(|(k, v)| k != "created" && new.get(k).is_some_and(|n| n != v));
     (changed && same_agent).then_some(EventKind::ConfigChanged)
 }
 

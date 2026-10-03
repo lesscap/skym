@@ -5,7 +5,8 @@ use rusqlite::Connection;
 use std::path::Path;
 
 /// Applied in order; `PRAGMA user_version` records how many have run.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE hosts (
   id             TEXT PRIMARY KEY,
   facts_json     TEXT,
@@ -92,7 +93,16 @@ CREATE TABLE exception_groups (
   sample_json   TEXT
 );
 CREATE INDEX exception_groups_host ON exception_groups (host, report_ts);
-"#];
+"#,
+    // When skym first heard from each host; existing hosts: the oldest thing stored about them.
+    r#"
+ALTER TABLE hosts ADD COLUMN first_seen TEXT;
+UPDATE hosts SET first_seen = MIN(last_seen,
+  COALESCE((SELECT MIN(ts) FROM disk_samples WHERE host = hosts.id), last_seen),
+  COALESCE((SELECT MIN(first_match_at) FROM incidents WHERE host = hosts.id), last_seen),
+  COALESCE((SELECT MIN(ts) FROM events WHERE host = hosts.id), last_seen));
+"#,
+];
 
 pub fn open(path: &Path) -> anyhow::Result<Connection> {
     let mut conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
@@ -131,5 +141,31 @@ mod tests {
         let conn = open_in_memory().unwrap();
         let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
         assert_eq!(version as usize, MIGRATIONS.len());
+    }
+
+    #[test]
+    fn hosts_known_before_first_seen_existed_date_from_the_oldest_record() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute_batch(
+            "INSERT INTO hosts (id, state_json, errors_json, last_report_ts, last_seen) VALUES
+               ('x', '{}', '[]', '2026-10-03T05:00:00Z', '2026-10-03T05:00:00Z'),
+               ('y', '{}', '[]', '2026-10-03T05:00:00Z', '2026-10-03T05:00:00Z');
+             INSERT INTO disk_samples VALUES ('x', '/', '2026-10-03T03:30:00Z', 1, 2),
+                                             ('x', '/', '2026-10-03T04:30:00Z', 1, 2);
+             INSERT INTO events (host, subject, ts, kind, kind_json)
+               VALUES ('y', 'host:y', '2026-09-20T00:00:00Z', 'restarted', '{}');",
+        )
+        .unwrap();
+        prepare(&mut conn).unwrap();
+        let first = |id: &str| -> String {
+            conn.query_row("SELECT first_seen FROM hosts WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            (first("x"), first("y")),
+            ("2026-10-03T03:30:00Z".into(), "2026-09-20T00:00:00Z".into())
+        );
     }
 }

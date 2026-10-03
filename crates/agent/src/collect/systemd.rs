@@ -73,6 +73,10 @@ fn workload(
             unit.ports.iter().copied().filter(|p| !l.contains(p)).collect()
         }),
         datastore: None,
+        state_since: None,
+        oom_killed: false,
+        health_failing_streak: None,
+        health_output: None,
     };
     (key, facts, state)
 }

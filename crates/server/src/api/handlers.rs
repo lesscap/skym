@@ -41,7 +41,7 @@ pub async fn index() -> Json<Value> {
             { "path": "/api/hosts/{host}", "answers": "what is going on with this host" },
             { "path": "/api/hosts/{host}/workloads/{project}/{service}", "answers": "what is going on with this application" },
             { "path": "/api/timeline", "params": "host (required), workload (project/service), since (default 6h), limit", "answers": "when did it start, what else happened" },
-            { "path": "/api/incidents", "params": "status (open|resolved), host, code, since, include_muted, limit", "answers": "incident history" },
+            { "path": "/api/incidents", "params": "status (open|resolved, default open), host, code, since (resolved only, default 24h), include_muted (default false), limit (default 100, at most 1000)", "answers": "incident history" },
             { "path": "/api/exceptions", "params": "host (required), workload, class (application|business), since (default 1h), limit", "answers": "exception groups" }
         ],
         "notes": "Follow `links` in responses instead of building URLs. `open_for` tells new problems from chronic ones."
@@ -81,7 +81,10 @@ pub async fn overview(State(s): State<AppState>) -> ApiResult<Overview> {
             ))
         })
         .await?;
-    let seen = all.into_iter().map(|h| (h.id, h.last_seen)).collect();
+    let seen = all
+        .into_iter()
+        .map(|h| (h.id, views::Seen { first: h.first_seen, last: h.last_seen }))
+        .collect();
     let views: Vec<IncidentView> =
         open.iter().map(|i| incident_view(i, &s.cfg.mute, now)).collect();
     Ok(Json(views::overview(&s.cfg, &seen, &views, now)))

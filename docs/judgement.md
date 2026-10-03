@@ -38,7 +38,7 @@ Rules that need a short history get it as input, so `judge` stays pure: `skym` r
 open     ⇐ the rule matches in N consecutive evaluations
 resolve  ⇐ the rule does not match in M consecutive evaluations
 reopen   ⇐ the rule matches N times again within 30 minutes after resolve → the same incident is reopened, not a new one
-severity ⇐ follows the latest finding (warn ↔ critical); the peak severity is kept
+severity ⇐ follows the latest finding (info ↔ warn ↔ critical); the peak severity is kept
 
 numeric thresholds use hysteresis: open at X, resolve below X − δ
 ```
@@ -51,11 +51,11 @@ N and M count reports, not minutes: the times below assume the default 60-second
 | --- | --- | --- | --- |
 | `HEARTBEAT_LOST` | No report for 3 intervals (3 minutes by default) | critical | A report arrives |
 | `WORKLOAD_DOWN` | Not running in 2 consecutive reports; `Exited (0)` does not count | critical | Running in 2 consecutive reports |
-| `WORKLOAD_UNHEALTHY` | Unhealthy in 2 consecutive reports | critical; warn after 24 hours open | Healthy in 2 consecutive reports |
+| `WORKLOAD_UNHEALTHY` | Running and unhealthy in 2 consecutive reports (a stopped workload is `WORKLOAD_DOWN`) | critical; warn after 24 hours open | Healthy in 2 consecutive reports |
 | `CRASH_LOOP` | ≥ 3 crash restarts within an hour | warn; critical at ≥ 10 | No restart for 30 minutes |
 | `OOM_KILLED` | An OOM kill within the last hour | warn; critical at ≥ 3 in an hour | No OOM kill for an hour |
 | `DISK_FILLING` | Used ≥ 85% (space or inodes), or projected full within 7 days | critical at ≥ 92% or projected full within 24 hours | Used below threshold − 3 points and projection beyond 7 days |
-| `LOG_UNBOUNDED` | Any container uses the `json-file` log driver without `max-size` (the `local` driver rotates by default). One incident per host, naming the containers | warn | Every container has a size limit |
+| `LOG_UNBOUNDED` | Any container uses the `json-file` log driver without `max-size` (the `local` driver rotates by default). One incident per host, naming the containers | info | Every container has a size limit |
 | `DATASTORE_UNREACHABLE` | Local probe fails twice in a row | critical | Probe succeeds twice in a row |
 | `REPLICATION_LAG` | Lag > 30 seconds | critical at > 5 minutes | Lag < 10 seconds for 5 minutes |
 | `ENDPOINT_DOWN` (planned) | 2 consecutive probes return 5xx, time out (10 s) or fail to connect | critical; warn for 4xx other than 401, 403, 404 | 2 consecutive good probes |
@@ -65,6 +65,9 @@ N and M count reports, not minutes: the times below assume the default 60-second
 Notes:
 
 - **No memory percentage rule.** Linux uses free memory as cache, so high usage alone is not a problem; OOM kills are.
+- **Severities**: `critical` and `warn` set a host's status; `info` is hygiene (an open incident that does not make a host unwell).
+- **Details say since when and why.** `WORKLOAD_DOWN` names the exit code, how long the workload has been down (it may predate skym), an OOM kill and a missing restart policy; `WORKLOAD_UNHEALTHY` the number of failed checks and the last check's output; `DATASTORE_UNREACHABLE` the address probed.
+- **A datastore** is a container whose image is a known engine and which runs that engine's server (no command, only flags, or the server binary): a backup job on a `postgres` image is an application.
 - **`WORKLOAD_UNHEALTHY` decays to warn after 24 hours.** A container that stays unhealthy without business impact would otherwise hold a critical status forever and hide new problems. Other codes keep their severity while open.
 - **Disk projection** uses a least-squares fit over the last 6 hours of used space. It needs at least 30 samples spanning 5 hours; with less, only the percentage applies.
 - `business` exception groups never open incidents; see the [exception protocol](exception-protocol.md). Neither do `_PROTOCOL_ERROR` groups: they point at the application's logging, not at a failure in production. `_OVERFLOW` groups count like any other application failure.

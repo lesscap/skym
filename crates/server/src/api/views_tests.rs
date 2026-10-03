@@ -51,7 +51,13 @@ fn links_encode_replica_names() {
     let l = links(&"workload:x/app/api#2".parse().unwrap());
     assert_eq!(l["workload"], "/api/hosts/x/workloads/app/api%232");
     assert_eq!(l["timeline"], "/api/timeline?host=x&workload=app/api%232&since=6h");
-    assert_eq!(links(&"mount:x:/data".parse().unwrap())["host"], "/api/hosts/x");
+    assert_eq!(l["exceptions"], "/api/exceptions?host=x&workload=app/api%232&since=1h");
+    let mount = links(&"mount:x:/data".parse().unwrap());
+    assert_eq!(
+        (mount["host"].as_str(), mount["incidents"].as_str()),
+        ("/api/hosts/x", "/api/incidents?host=x")
+    );
+    assert_eq!(mount["exceptions"], "/api/exceptions?host=x&since=1h");
     assert!(links(&"endpoint:https://a.example".parse().unwrap()).is_empty());
     assert_eq!(encode("a b/c~d"), "a%20b%2Fc~d");
 }
@@ -68,11 +74,10 @@ fn overview_ranks_hosts_and_ignores_muted_incidents() {
         hosts: vec![host("a"), host("b"), host("c"), host("d")],
         ..ServerConfig::default()
     };
-    let seen = BTreeMap::from([
-        ("a".to_string(), at(0)),
-        ("b".to_string(), at(0)),
-        ("c".to_string(), at(0)),
-    ]);
+    let seen: BTreeMap<String, Seen> = ["a", "b", "c"]
+        .into_iter()
+        .map(|h| (h.to_string(), Seen { first: at(-60), last: at(0) }))
+        .collect();
     let open = [
         incident_view(&incident("host:a", IncidentCode::OomKilled, Severity::Warn), &[], at(5)),
         incident_view(
@@ -85,6 +90,7 @@ fn overview_ranks_hosts_and_ignores_muted_incidents() {
             &[mute("workload:c/app/api", IncidentCode::WorkloadDown, None)],
             at(5),
         ),
+        incident_view(&incident("host:c", IncidentCode::LogUnbounded, Severity::Info), &[], at(5)),
     ];
     let o = overview(&cfg, &seen, &open, at(5));
     let hosts: Vec<(&str, Status)> =
@@ -99,6 +105,13 @@ fn overview_ranks_hosts_and_ignores_muted_incidents() {
     );
     assert_eq!(o.customers[0].hosts[0].last_report_ago.as_deref(), Some("5m"));
     assert_eq!(o.customers[0].hosts[1].last_report_ago, None);
+    let c = &o.customers[0].hosts[3];
+    assert_eq!(
+        (c.status, c.info_count, c.incidents.len()),
+        (Status::Ok, 1, 1),
+        "info is listed, not counted"
+    );
+    assert_eq!(o.customers[0].hosts[0].observed_since, Some(at(-60)));
     let calm = overview(&cfg, &seen, &open[2..], at(5));
     assert_eq!(calm.status, Status::Unknown, "a host that never reported outranks warnings");
 }

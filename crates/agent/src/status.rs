@@ -13,13 +13,7 @@ pub fn host_view(report: &Report, mut findings: Vec<Finding>) -> HostView {
         .workloads
         .iter()
         .map(|w| {
-            workload_summary(
-                w.key.clone(),
-                w.facts.as_ref(),
-                w.state.run,
-                &incidents,
-                BTreeMap::new(),
-            )
+            workload_summary(w.key.clone(), w.facts.as_ref(), &w.state, &incidents, BTreeMap::new())
         })
         .collect();
     HostView {
@@ -27,6 +21,7 @@ pub fn host_view(report: &Report, mut findings: Vec<Finding>) -> HostView {
         customer: None,
         status: rollup(&incidents),
         last_report_ago: None,
+        observed_since: None,
         facts: report.host_facts.clone(),
         state: Some(report.host_state.clone()),
         workloads,

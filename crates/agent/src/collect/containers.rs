@@ -1,6 +1,7 @@
 //! Docker containers → workloads. Pure functions over Docker's inspect model;
 //! container environment variables are never read here.
 
+use crate::exceptions::text::{redact, truncate};
 use bollard::models::{
     ContainerInspectResponse, ContainerStateStatusEnum, HealthStatusEnum, RestartPolicyNameEnum,
 };
@@ -36,8 +37,14 @@ pub fn workload_key(host: &str, name: &str, labels: &Labels) -> WorkloadKey {
     WorkloadKey { host: host.to_string(), project, service }
 }
 
-/// By the image's repository name, ignoring registry, tag and digest.
-pub fn classify(image: &str) -> (WorkloadKind, Option<DatastoreKind>) {
+/// By the image's repository name, ignoring registry, tag and digest. A datastore image
+/// counts as a datastore unless it plainly runs something else: a backup job on a
+/// `postgres` image is an application.
+pub fn classify(
+    image: &str,
+    entrypoint: &[String],
+    cmd: &[String],
+) -> (WorkloadKind, Option<DatastoreKind>) {
     let repo = image.split('@').next().unwrap_or(image);
     let name = repo.rsplit('/').next().unwrap_or(repo);
     let name = name.split(':').next().unwrap_or(name);
@@ -48,7 +55,8 @@ pub fn classify(image: &str) -> (WorkloadKind, Option<DatastoreKind>) {
         "redis" | "valkey" => Some(DatastoreKind::Redis),
         "mysql" | "mariadb" => Some(DatastoreKind::Mysql),
         _ => None,
-    };
+    }
+    .filter(|_| !runs_a_job(entrypoint, cmd));
     let kind = match (datastore, name) {
         (Some(_), _) => WorkloadKind::Datastore,
         (None, "nginx" | "caddy" | "traefik" | "haproxy" | "envoy") => WorkloadKind::Proxy,
@@ -57,11 +65,41 @@ pub fn classify(image: &str) -> (WorkloadKind, Option<DatastoreKind>) {
     (kind, datastore)
 }
 
+/// A shell, a client or a scheduler as the entrypoint or the command: a job that uses the
+/// engine's image, not its server. Anything else (the engine, an image's own start script
+/// such as Bitnami's `run.sh`, or flags) is taken for the server.
+fn runs_a_job(entrypoint: &[String], cmd: &[String]) -> bool {
+    const JOBS: &[&str] = &[
+        "sh",
+        "bash",
+        "ash",
+        "dash",
+        "cron",
+        "crond",
+        "pg_dump",
+        "pg_dumpall",
+        "pg_basebackup",
+        "psql",
+        "redis-cli",
+        "valkey-cli",
+        "mysql",
+        "mysqldump",
+        "mariadb",
+        "mariadb-dump",
+    ];
+    [entrypoint.first(), cmd.first()]
+        .into_iter()
+        .flatten()
+        .any(|program| program.rsplit('/').next().is_some_and(|name| JOBS.contains(&name)))
+}
+
 pub fn facts_of(i: &ContainerInspectResponse) -> WorkloadFacts {
     let config = i.config.as_ref();
     let host = i.host_config.as_ref();
     let image = config.and_then(|c| c.image.clone()).unwrap_or_default();
-    let (kind, datastore) = classify(&image);
+    let entrypoint = config.and_then(|c| c.entrypoint.as_deref()).unwrap_or_default();
+    let cmd = config.and_then(|c| c.cmd.as_deref()).unwrap_or_default();
+    let (kind, datastore) = classify(&image, entrypoint, cmd);
     let log = host.and_then(|h| h.log_config.as_ref());
     let healthcheck = config
         .and_then(|c| c.healthcheck.as_ref()?.test.as_ref())
@@ -127,7 +165,8 @@ pub fn state_of(
         Some(S::CREATED) => RunState::Created,
         _ => RunState::Unknown,
     };
-    let health = state.and_then(|s| s.health.as_ref()?.status).and_then(|h| match h {
+    let checks = state.and_then(|s| s.health.as_ref());
+    let health = checks.and_then(|h| h.status).and_then(|h| match h {
         HealthStatusEnum::HEALTHY => Some(Health::Healthy),
         HealthStatusEnum::UNHEALTHY => Some(Health::Unhealthy),
         HealthStatusEnum::STARTING => Some(Health::Starting),
@@ -141,6 +180,23 @@ pub fn state_of(
         memory_used_bytes: memory,
         missing_ports: Vec::new(),
         datastore: None,
+        state_since: state
+            .and_then(|s| match run {
+                RunState::Running | RunState::Restarting | RunState::Paused => {
+                    s.started_at.as_deref()
+                }
+                _ => s.finished_at.as_deref(),
+            })
+            .and_then(timestamp),
+        oom_killed: state.and_then(|s| s.oom_killed) == Some(true),
+        health_failing_streak: checks
+            .and_then(|h| h.failing_streak)
+            .filter(|n| *n > 0)
+            .and_then(|n| u32::try_from(n).ok()),
+        health_output: checks
+            .filter(|_| health == Some(Health::Unhealthy))
+            .and_then(|h| h.log.as_ref()?.last()?.output.as_deref())
+            .map(|o| truncate(redact(o.trim()), 200)),
     }
 }
 

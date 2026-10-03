@@ -6,6 +6,7 @@ use crate::store::hosts::{HostRow, WorkloadRow};
 use crate::store::incidents::LogEntry;
 use jiff::Timestamp;
 use skym_core::model::{Event, ExceptionGroup};
+use skym_core::rules::Severity;
 use skym_core::subject::{CustomerId, HostId, Subject};
 use skym_core::time::format_duration;
 use skym_core::view::{
@@ -38,9 +39,12 @@ pub fn incident_view(i: &Incident, mutes: &[Mute], now: Timestamp) -> IncidentVi
 /// Where to look next, so an agent never builds URLs itself.
 pub fn links(subject: &Subject) -> BTreeMap<String, String> {
     let host_links = |h: &str| {
+        let h = encode(h);
         BTreeMap::from([
-            ("host".to_string(), format!("/api/hosts/{}", encode(h))),
-            ("timeline".to_string(), format!("/api/timeline?host={}&since=6h", encode(h))),
+            ("host".to_string(), format!("/api/hosts/{h}")),
+            ("timeline".to_string(), format!("/api/timeline?host={h}&since=6h")),
+            ("exceptions".to_string(), format!("/api/exceptions?host={h}&since=1h")),
+            ("incidents".to_string(), format!("/api/incidents?host={h}")),
         ])
     };
     match subject {
@@ -54,6 +58,11 @@ pub fn links(subject: &Subject) -> BTreeMap<String, String> {
                     "timeline".to_string(),
                     format!("/api/timeline?host={h}&workload={p}/{s}&since=6h"),
                 ),
+                (
+                    "exceptions".to_string(),
+                    format!("/api/exceptions?host={h}&workload={p}/{s}&since=1h"),
+                ),
+                ("incidents".to_string(), format!("/api/incidents?host={h}")),
             ])
         }
         Subject::Endpoint(_) => BTreeMap::new(),
@@ -91,12 +100,13 @@ pub fn host(
         .into_iter()
         .map(|w| {
             let links = links(&Subject::Workload(w.key.clone()));
-            workload_summary(w.key, w.facts.as_ref(), w.state.run, &incidents, links)
+            workload_summary(w.key, w.facts.as_ref(), &w.state, &incidents, links)
         })
         .collect();
     HostView {
         status: host_status(&incidents, row.is_some()),
         last_report_ago: row.as_ref().map(|r| format_duration(now.duration_since(r.last_seen))),
+        observed_since: row.as_ref().map(|r| r.first_seen),
         facts: row.as_ref().and_then(|r| r.facts.clone()),
         errors: row.as_ref().map(|r| r.errors.clone()).unwrap_or_default(),
         state: row.map(|r| r.state),
@@ -126,10 +136,16 @@ pub fn workload(
     }
 }
 
+/// When skym first and last heard from a host.
+pub struct Seen {
+    pub first: Timestamp,
+    pub last: Timestamp,
+}
+
 /// Customers in configuration order; within each, the most urgent hosts first.
 pub fn overview(
     cfg: &ServerConfig,
-    last_seen: &BTreeMap<HostId, Timestamp>,
+    seen: &BTreeMap<HostId, Seen>,
     open: &[IncidentView],
     now: Timestamp,
 ) -> Overview {
@@ -145,11 +161,14 @@ pub fn overview(
                     let subject_host = |i: &&IncidentView| i.subject.host() == Some(&h.id);
                     let mine: Vec<IncidentView> =
                         open.iter().filter(subject_host).filter(|i| !i.muted).cloned().collect();
-                    let seen = last_seen.get(&h.id);
+                    let seen = seen.get(&h.id);
                     HostOverview {
                         id: h.id.clone(),
                         status: host_status(&mine, seen.is_some()),
-                        last_report_ago: seen.map(|t| format_duration(now.duration_since(*t))),
+                        last_report_ago: seen.map(|s| format_duration(now.duration_since(s.last))),
+                        observed_since: seen.map(|s| s.first),
+                        info_count: mine.iter().filter(|i| i.severity == Severity::Info).count()
+                            as u32,
                         incidents: mine,
                         links: links(&Subject::Host(h.id.clone())),
                     }

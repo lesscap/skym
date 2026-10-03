@@ -54,7 +54,38 @@ fn classification_by_repository_name() {
         ("registry.example.com/team/postgres-backup:1", WorkloadKind::App, None),
     ];
     for (image, kind, datastore) in cases {
-        assert_eq!(classify(image), (kind, datastore), "{image}");
+        assert_eq!(classify(image, &[], &[]), (kind, datastore), "{image}");
+    }
+}
+
+#[test]
+fn a_datastore_image_running_a_job_is_an_application() {
+    let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let entry = args(&["docker-entrypoint.sh"]);
+    let servers = [
+        ("postgres:17", entry.clone(), args(&["postgres", "-c", "max_connections=200"])),
+        ("redis:7", entry.clone(), args(&["--appendonly", "yes"])),
+        (
+            "bitnami/postgresql:16",
+            args(&["/opt/bitnami/scripts/postgresql/entrypoint.sh"]),
+            args(&["/opt/bitnami/scripts/postgresql/run.sh"]),
+        ),
+        ("mariadb:11", vec![], vec![]),
+    ];
+    for (image, entrypoint, cmd) in &servers {
+        assert_eq!(classify(image, entrypoint, cmd).0, WorkloadKind::Datastore, "{image} {cmd:?}");
+    }
+    let jobs = [
+        (entry.clone(), args(&["/bin/sh", "-ec", "while true; do pg_dump --host=database; done"])),
+        (args(&["/bin/sh", "-c", "pg_dump --host=database"]), vec![]),
+        (entry, args(&["pg_dump", "--host=database"])),
+    ];
+    for (entrypoint, cmd) in &jobs {
+        assert_eq!(
+            classify("postgres:17-alpine", entrypoint, cmd),
+            (WorkloadKind::App, None),
+            "{cmd:?}"
+        );
     }
 }
 
@@ -88,6 +119,34 @@ fn state_from_inspect() {
     assert_eq!(timestamp("0001-01-01T00:00:00Z"), None);
     assert_eq!(timestamp("1970-01-01T00:00:00Z"), None);
     assert_eq!(timestamp("2026-10-01T11:50:00Z").map(|t| t.as_second()), Some(1_790_855_400));
+}
+
+#[test]
+fn state_says_since_when_and_why() {
+    let state = |json: serde_json::Value| {
+        state_of(&serde_json::from_value::<ContainerInspectResponse>(json).unwrap(), vec![], None)
+    };
+    let exited = state(serde_json::json!({ "State": {
+        "Status": "exited", "ExitCode": 137, "OOMKilled": true,
+        "StartedAt": "2025-10-01T00:00:00Z", "FinishedAt": "2025-10-07T22:42:44Z" } }));
+    assert_eq!(exited.state_since, timestamp("2025-10-07T22:42:44Z"));
+    assert!(exited.oom_killed);
+    let long = format!(
+        "curl: (7) Failed to connect to 127.0.0.1 port 80; Bearer abc.def {}",
+        "x".repeat(300)
+    );
+    let unhealthy = state(serde_json::json!({ "State": {
+        "Status": "running", "StartedAt": "2026-10-01T00:00:00Z", "FinishedAt": "0001-01-01T00:00:00Z",
+        "Health": { "Status": "unhealthy", "FailingStreak": 3471,
+                    "Log": [{ "Output": "old" }, { "Output": format!("{long}\n") }] } } }));
+    assert_eq!(unhealthy.state_since, timestamp("2026-10-01T00:00:00Z"));
+    assert_eq!(unhealthy.health_failing_streak, Some(3471));
+    let output = unhealthy.health_output.unwrap();
+    assert!(output.starts_with("curl: (7)") && output.contains("Bearer [REDACTED]"), "{output}");
+    assert_eq!(output.chars().count(), 200);
+    let healthy = state(serde_json::json!({ "State": {
+        "Status": "running", "Health": { "Status": "healthy", "FailingStreak": 0, "Log": [{ "Output": "ok" }] } } }));
+    assert_eq!((healthy.health_failing_streak, healthy.health_output), (None, None));
 }
 
 #[test]

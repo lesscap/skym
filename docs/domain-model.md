@@ -101,7 +101,7 @@ Each entity carries two groups of attributes.
 | --- | --- | --- |
 | Changes | Rarely | Every interval |
 | Host | hostname, OS, kernel, architecture, CPU count, memory total, mounts and file system types, Docker version, `skym` version, boot time | load, memory used, size, used space and inodes per mount, counts of short-lived containers |
-| Workload | kind and datastore engine, image and image ID, created time, restart policy, port mappings, memory limit, whitelisted labels, healthcheck defined, log driver options | run state, crash restart times within the last hour, healthcheck result, memory used, datastore probe result |
+| Workload | kind and datastore engine, image and image ID, created time, restart policy, port mappings, memory limit, whitelisted labels, healthcheck defined, log driver options | run state and since when, exit code and OOM kill, crash restart times within the last hour, healthcheck result (failing streak, last output), memory used, datastore probe result |
 
 A change in facts produces an event:
 
@@ -134,7 +134,7 @@ Events derived from facts are produced by the server by comparing reports. Event
 struct Incident {
     subject: Subject,
     code: IncidentCode,
-    severity: Severity,          // Warn | Critical
+    severity: Severity,          // Info | Warn | Critical
     opened_at: Timestamp,
     last_seen: Timestamp,
     resolved_at: Option<Timestamp>,
@@ -145,7 +145,8 @@ struct Incident {
 `(subject, code)` identifies an incident: while it is open, repeated detections update `last_seen` instead of opening a new one.
 
 ```text
-status(subject) = max(severity of open incidents on subject and its children), ok if none
+status(subject) = max(severity of open, unmuted incidents on subject and its children), ok if none
+                  (info counts as ok)
 
 now − host.last_seen > 3 × report_interval ⇒ open Incident { subject: host, code: HEARTBEAT_LOST, severity: Critical }
 ```

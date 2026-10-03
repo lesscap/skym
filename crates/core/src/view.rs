@@ -11,24 +11,49 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// `Unknown` means no data, e.g. a host that never reported. Ordered by urgency:
-/// knowing nothing about a host outranks a warning, not a critical incident.
-#[derive(
-    Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord,
-)]
+/// `Unknown` means no data, e.g. a host that never reported (and any status a newer server
+/// adds). Ordered by urgency: knowing nothing about a host outranks a warning, not a
+/// critical incident.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Ok,
     Warn,
-    Unknown,
     Critical,
+    #[serde(other)]
+    Unknown,
+}
+
+impl Status {
+    const fn urgency(self) -> u8 {
+        match self {
+            Status::Ok => 0,
+            Status::Warn => 1,
+            Status::Unknown => 2,
+            Status::Critical => 3,
+        }
+    }
+}
+
+impl Ord for Status {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.urgency().cmp(&other.urgency())
+    }
+}
+
+impl PartialOrd for Status {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl From<Severity> for Status {
     fn from(s: Severity) -> Self {
         match s {
+            Severity::Info => Status::Ok,
             Severity::Warn => Status::Warn,
             Severity::Critical => Status::Critical,
+            Severity::Unknown => Status::Unknown,
         }
     }
 }
@@ -58,6 +83,12 @@ pub struct WorkloadSummary {
     pub kind: Option<WorkloadKind>,
     pub status: Status,
     pub run: RunState,
+    /// With `run`: an exit code 0 is a finished job, anything else a failure.
+    #[serde(default)]
+    pub exit_code: Option<i64>,
+    /// Since when it is in `run`: the real start of a problem, which may predate skym.
+    #[serde(default)]
+    pub state_since: Option<Timestamp>,
     pub image: Option<String>,
     #[serde(default)]
     pub links: BTreeMap<String, String>,
@@ -69,6 +100,9 @@ pub struct HostView {
     pub customer: Option<CustomerId>,
     pub status: Status,
     pub last_report_ago: Option<String>,
+    /// When skym first heard from the host: incidents open about that long may be older.
+    #[serde(default)]
+    pub observed_since: Option<Timestamp>,
     pub facts: Option<HostFacts>,
     pub state: Option<HostState>,
     #[serde(default)]
@@ -85,6 +119,11 @@ pub struct HostOverview {
     pub id: HostId,
     pub status: Status,
     pub last_report_ago: Option<String>,
+    #[serde(default)]
+    pub observed_since: Option<Timestamp>,
+    /// Open `info` incidents among `incidents`: hygiene that does not count to `status`.
+    #[serde(default)]
+    pub info_count: u32,
     #[serde(default)]
     pub incidents: Vec<IncidentView>,
     #[serde(default)]
@@ -190,16 +229,16 @@ pub fn rollup<'a>(incidents: impl IntoIterator<Item = &'a IncidentView>) -> Stat
     incidents
         .into_iter()
         .filter(|i| !i.muted)
-        .map(|i| i.severity)
+        .map(|i| Status::from(i.severity))
         .max()
-        .map_or(Status::Ok, Status::from)
+        .unwrap_or(Status::Ok)
 }
 
 /// A workload's line in a host view, its status rolled up from its own incidents.
 pub fn workload_summary(
     key: WorkloadKey,
     facts: Option<&WorkloadFacts>,
-    run: RunState,
+    state: &WorkloadState,
     incidents: &[IncidentView],
     links: BTreeMap<String, String>,
 ) -> WorkloadSummary {
@@ -208,7 +247,9 @@ pub fn workload_summary(
         status: rollup(incidents.iter().filter(|i| i.subject == subject)),
         kind: facts.map(|f| f.kind),
         image: facts.map(|f| f.image.clone()),
-        run,
+        run: state.run,
+        exit_code: state.exit_code,
+        state_since: state.state_since,
         links,
         key,
     }

@@ -30,6 +30,15 @@ fn unchanged_facts_make_no_events() {
 }
 
 #[test]
+fn a_container_recreated_unchanged_is_no_config_change() {
+    let old = report();
+    let mut new = old.clone();
+    new.workloads[0].facts.as_mut().unwrap().created =
+        Some("2026-10-03T03:35:26Z".parse().unwrap());
+    assert!(events(old.host_facts.as_ref(), &stored(&old), &new).is_empty());
+}
+
+#[test]
 fn image_changes_are_deployments_and_other_changes_config() {
     let old = report();
     let mut new = old.clone();

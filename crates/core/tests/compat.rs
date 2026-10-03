@@ -192,11 +192,27 @@ fn code_and_severity_names_match_the_wire() {
         assert_eq!(serde_json::to_value(code).unwrap(), code.as_str());
         assert_eq!(code.as_str().parse::<IncidentCode>(), Ok(code));
     }
-    for severity in [Severity::Warn, Severity::Critical] {
+    for severity in [Severity::Info, Severity::Warn, Severity::Critical] {
         assert_eq!(serde_json::to_value(severity).unwrap(), severity.as_str());
         assert_eq!(severity.as_str().parse::<Severity>(), Ok(severity));
     }
-    assert!("NOPE".parse::<IncidentCode>().is_err() && "info".parse::<Severity>().is_err());
+    // Parsing (configuration, storage) stays strict; reading the API tolerates new values.
+    assert!("NOPE".parse::<IncidentCode>().is_err() && "unknown".parse::<Severity>().is_err());
+}
+
+#[test]
+fn values_a_newer_server_adds_read_as_unknown() {
+    use skym_core::rules::{IncidentCode, Severity};
+    use skym_core::view::Status;
+    let read = |s: &str| serde_json::from_str::<(IncidentCode, Severity, Status)>(s).unwrap();
+    assert_eq!(
+        read(r#"["CERT_REVOKED", "emergency", "degraded"]"#),
+        (IncidentCode::Unknown, Severity::Unknown, Status::Unknown)
+    );
+    assert_eq!(
+        read(r#"["CRASH_LOOP", "info", "ok"]"#),
+        (IncidentCode::CrashLoop, Severity::Info, Status::Ok)
+    );
 }
 
 #[test]

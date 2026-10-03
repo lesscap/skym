@@ -150,6 +150,17 @@ pub struct WorkloadState {
     #[serde(default)]
     pub missing_ports: Vec<u16>,
     pub datastore: Option<DatastoreProbe>,
+    /// Since when the workload is in its run state: started, or exited.
+    #[serde(default)]
+    pub state_since: Option<Timestamp>,
+    /// The last exit was an out-of-memory kill.
+    #[serde(default)]
+    pub oom_killed: bool,
+    /// Consecutive failed healthchecks, and the last check's output (truncated, redacted).
+    #[serde(default)]
+    pub health_failing_streak: Option<u32>,
+    #[serde(default)]
+    pub health_output: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]

@@ -101,6 +101,9 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
             bail!("a token hash is used twice; every host and reader needs its own token");
         }
     }
+    if let Some(m) = cfg.mute.iter().find(|m| m.code == IncidentCode::Unknown) {
+        bail!("mute for {} names an unknown incident code", m.subject);
+    }
     Ok(())
 }
 

@@ -17,9 +17,9 @@ curl -fsS -H "Authorization: Bearer $SKYM_TOKEN" "$SKYM_URL/api/overview"
 
 1. Start at `/api/overview`. It holds every open, unmuted incident, most urgent host first.
 2. `HEARTBEAT_LOST` comes first: nothing else about that host is current. When the details say "all hosts silent", suspect the server or its network, not every host.
-3. Follow `links` to drill down (host → workload → timeline); never build URLs.
-4. `open_for` tells new problems from chronic ones; lead with new ones.
-5. Severity, thresholds and status are already judged: report them, do not re-derive them from raw numbers.
+3. Follow `links` to drill down (host → workload → timeline, exceptions, incidents); build a URL only from what `GET /api` lists.
+4. `open_for` is how long skym has seen a problem, not how long it has existed: when it is close to the host's `observed_since`, the problem predates skym. A workload's `state_since` (and the incident `detail`) says when it really began. Lead with problems that are new.
+5. Severity, thresholds and status are already judged: report them, do not re-derive them from raw numbers. `info` incidents are hygiene (e.g. unbounded logs): mention them last, briefly.
 6. Explain with the timeline: a `deployed` or `config_changed` event just before an incident is the first suspect.
 7. Exceptions: `/api/exceptions?host=…` groups failures by component and code; `business` ones are expected outcomes, not faults.
 

@@ -8,7 +8,7 @@ use crate::model::{
 use crate::report::{Report, WorkloadReport};
 use crate::rules::{Finding, IncidentCode, Severity};
 use crate::subject::{Subject, WorkloadKey};
-use crate::time::SignedDuration;
+use crate::time::{SignedDuration, Timestamp, format_duration};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// History the report alone does not carry, already filtered by the caller.
@@ -50,9 +50,10 @@ pub fn judge(input: &JudgeInput) -> Vec<Finding> {
 
 fn workload(input: &JudgeInput, w: &WorkloadReport) -> Vec<Finding> {
     let subject = &Subject::Workload(w.key.clone());
+    let facts = w.facts.as_ref().or_else(|| input.facts.get(&w.key));
     let state = &w.state;
     [
-        down(subject, state),
+        down(subject, state, facts, input.report.ts),
         unhealthy(subject, state),
         crash_loop(subject, state, input),
         datastore_unreachable(subject, state),
@@ -71,7 +72,14 @@ fn critical_if(critical: bool) -> Severity {
     if critical { Severity::Critical } else { Severity::Warn }
 }
 
-fn down(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
+/// The detail says since when and what is known about why: an agent reading it should
+/// tell a crash a minute ago from a container stopped a year ago.
+fn down(
+    subject: &Subject,
+    state: &WorkloadState,
+    facts: Option<&WorkloadFacts>,
+    now: Timestamp,
+) -> Option<Finding> {
     let not_running = match (state.run, state.exit_code) {
         (RunState::Running | RunState::Unknown, _) | (RunState::Exited, Some(0)) => None,
         (RunState::Exited, Some(code)) => Some(format!("exited ({code})")),
@@ -81,14 +89,42 @@ fn down(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
         let ports: Vec<String> = state.missing_ports.iter().map(u16::to_string).collect();
         (!ports.is_empty()).then(|| format!("not listening on {}", ports.join(", ")))
     };
-    let detail = not_running.or_else(not_listening)?;
+    let detail = match not_running {
+        Some(what) => [
+            Some(what),
+            state.state_since.map(|t| format!("for {}", format_duration(now.duration_since(t)))),
+            state.oom_killed.then(|| "OOM killed".to_string()),
+            // Containers only: a systemd unit restarts by its own configuration.
+            facts
+                .filter(|f| f.restart_policy.is_none() && !is_systemd(subject))
+                .map(|_| "no restart policy".to_string()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", "),
+        None => not_listening()?,
+    };
     Some(finding(subject, IncidentCode::WorkloadDown, Severity::Critical, detail))
 }
 
+fn is_systemd(subject: &Subject) -> bool {
+    matches!(subject, Subject::Workload(k) if k.project == "_systemd")
+}
+
+/// Only while running: a stopped container is `WORKLOAD_DOWN`, whatever its last health.
 fn unhealthy(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
-    let detail = "healthcheck unhealthy".to_string();
-    (state.health == Some(Health::Unhealthy))
-        .then(|| finding(subject, IncidentCode::WorkloadUnhealthy, Severity::Critical, detail))
+    if state.run != RunState::Running || state.health != Some(Health::Unhealthy) {
+        return None;
+    }
+    let failing = state
+        .health_failing_streak
+        .map_or_else(|| "healthcheck failing".to_string(), |n| format!("failing {n} checks"));
+    let detail = match state.health_output.as_deref().filter(|o| !o.is_empty()) {
+        Some(output) => format!("{failing}: {output}"),
+        None => failing,
+    };
+    Some(finding(subject, IncidentCode::WorkloadUnhealthy, Severity::Critical, detail))
 }
 
 fn crash_loop(subject: &Subject, state: &WorkloadState, input: &JudgeInput) -> Option<Finding> {
@@ -137,7 +173,7 @@ fn log_unbounded(input: &JudgeInput) -> Option<Finding> {
         if more > 0 { format!(" and {more} more") } else { String::new() }
     );
     let host = Subject::Host(input.report.host.clone());
-    Some(finding(&host, IncidentCode::LogUnbounded, Severity::Warn, detail))
+    Some(finding(&host, IncidentCode::LogUnbounded, Severity::Info, detail))
 }
 
 fn datastore_unreachable(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
@@ -239,7 +275,7 @@ fn app_exceptions(input: &JudgeInput) -> Vec<Finding> {
         .filter(|(_, c)| c.alarming())
         .map(|(key, c)| {
             let detail = format!(
-                "gave up {}, retrying {}, stderr {} in 15m",
+                "{} failed for good, {} retrying, {} stderr errors in the last 15 min",
                 c.gave_up, c.retrying, c.stderr
             );
             let severity = critical_if(c.gave_up >= 20);

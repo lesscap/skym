@@ -78,10 +78,12 @@ async fn probe_at(
     };
     let Some(p) = protocol(kind) else { return unreachable("unknown datastore") };
     let Some(addr) = addr else { return unreachable("no address") };
+    // The address says what was probed, so a wrong guess is visible.
+    let at = |what: &str| unreachable(&format!("{addr}: {what}"));
     match timeout(TIMEOUT, handshake(addr, p.hello)).await {
-        Err(_) => unreachable("timeout"),
-        Ok(Err(e)) => unreachable(&e.kind().to_string()),
-        Ok(Ok(reply)) if !(p.answered)(&reply) => unreachable("unexpected reply"),
+        Err(_) => at("timeout"),
+        Ok(Err(e)) => at(&e.kind().to_string()),
+        Ok(Ok(reply)) if !(p.answered)(&reply) => at("unexpected reply"),
         Ok(Ok(_)) => match pg.filter(|creds| creds.password.is_some()) {
             Some(creds) => lag(addr, creds).await,
             None => {
@@ -189,8 +191,9 @@ mod tests {
     async fn probes_tell_answers_from_silence() {
         let probe = |kind, addr| async move { probe_at(kind, Some(addr), None).await };
         assert!(probe(DatastoreKind::Redis, fake(b"-NOAUTH\r\n").await).await.reachable);
-        let wrong = probe(DatastoreKind::Redis, fake(b"HTTP/1.1 400\r\n").await).await;
-        assert_eq!((wrong.reachable, wrong.detail.as_str()), (false, "unexpected reply"));
+        let http = fake(b"HTTP/1.1 400\r\n").await;
+        let wrong = probe(DatastoreKind::Redis, http).await;
+        assert_eq!((wrong.reachable, wrong.detail), (false, format!("{http}: unexpected reply")));
         let closed =
             tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
         assert!(!probe(DatastoreKind::Postgres, closed).await.reachable);

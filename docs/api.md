@@ -6,9 +6,9 @@ The API `skym-server` offers to AI agents and, later, to the UI. It is read-only
 
 - **One call per question.** Each of the reader's questions (see the [domain model](domain-model.md)) is answered by one endpoint.
 - **Bounded responses.** The overview carries status and counts, not facts. Lists have a default limit and return `truncated: true` when cut.
-- **Links to drill down.** Objects carry `links` to the endpoints that explain them, so an agent never builds URLs itself.
+- **Links to drill down.** Objects carry `links` to the endpoints that explain them (`host`, `workload`, `timeline`, `exceptions`, `incidents`), so an agent rarely builds URLs itself.
 - **Self-describing.** `GET /api` lists every endpoint with its purpose and parameters.
-- **Two forms of time.** Absolute timestamps (`opened_at`, RFC 3339) and durations (`open_for: "3h12m"`). Durations let an agent tell new problems from chronic ones at a glance.
+- **Two forms of time.** Absolute timestamps (`opened_at`, RFC 3339) and durations (`open_for: "3h12m"`). Durations let an agent tell new problems from chronic ones at a glance. `open_for` is how long skym has seen a problem: compare it with the host's `observed_since`, and read a workload's `state_since` for when its state really began.
 - **Read-only.** Muting lives in the server configuration. A leaked reader token can read but not change anything.
 
 ## Authentication
@@ -58,7 +58,7 @@ token_sha256 = "…"
 
 ### Status
 
-`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Hosts are listed by urgency: critical, then unknown, then warn, then ok. Muted incidents never count towards a status. `incidents` lists them only with `include_muted=true`; host and workload views include them with `muted: true`; the overview leaves them out and counts them in `muted_count`.
+`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Only `warn` and `critical` incidents count; `info` incidents (hygiene) are listed, and counted in the overview's `info_count`. Hosts are listed by urgency: critical, then unknown, then warn, then ok. Muted incidents never count towards a status. `incidents` lists them only with `include_muted=true`; host and workload views include them with `muted: true`; the overview leaves them out and counts them in `muted_count`.
 
 ### Lists and timeline
 
@@ -79,6 +79,8 @@ token_sha256 = "…"
           "id": "i",
           "status": "critical",
           "last_report_ago": "40s",
+          "observed_since": "2026-09-01T08:00:00Z",
+          "info_count": 0,
           "incidents": [
             {
               "code": "CRASH_LOOP",
@@ -126,4 +128,4 @@ Two responses do not use this shape yet: unknown paths (404) and report bodies o
 
 ## Compatibility
 
-The API has no version prefix. It follows the [evolution](architecture.md#evolution) rules: endpoints, fields and parameters are only added; clients ignore fields they do not know.
+The API has no version prefix. It follows the [evolution](architecture.md#evolution) rules: endpoints, fields and parameters are only added; clients ignore fields they do not know, and read enum values they do not know (a new incident code, severity or status) as `UNKNOWN` / `unknown`.

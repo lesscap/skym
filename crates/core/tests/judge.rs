@@ -80,6 +80,29 @@ fn workload_down() {
 }
 
 #[test]
+fn a_stopped_workload_says_since_when_and_why_it_stays_down() {
+    let detail = |r: &Report| {
+        findings(r, &Ctx::default())
+            .into_iter()
+            .find(|f| f.code == IncidentCode::WorkloadDown)
+            .map(|f| f.detail)
+    };
+    let mut r = base();
+    let w = &mut r.workloads[APP];
+    (w.state.run, w.state.exit_code) = (RunState::Exited, Some(137));
+    assert_eq!(detail(&r).as_deref(), Some("exited (137)"));
+    let three_days_ago = ago(&r, 3 * 24 * 60);
+    let w = &mut r.workloads[APP];
+    w.state.state_since = Some(three_days_ago);
+    w.state.oom_killed = true;
+    w.facts.as_mut().unwrap().restart_policy = None; // the agent reports "no" as none
+    assert_eq!(detail(&r).as_deref(), Some("exited (137), for 3d, OOM killed, no restart policy"));
+    let mut unit = base();
+    unit.workloads[XRAY].state.run = RunState::Dead;
+    assert_eq!(detail(&unit).as_deref(), Some("dead"), "systemd restarts by its own unit file");
+}
+
+#[test]
 fn crash_loop_with_hysteresis() {
     let with_restarts = |mins: &[i64]| {
         let mut r = base();
@@ -206,7 +229,7 @@ fn log_unbounded_is_one_finding_per_host_naming_five() {
         })
         .collect();
     let found = severity_of(&r, &Ctx::default(), IncidentCode::LogUnbounded);
-    assert_eq!(found, Some(Severity::Warn));
+    assert_eq!(found, Some(Severity::Info), "hygiene, not a reason to call the host unwell");
     let detail = findings(&r, &Ctx::default())
         .into_iter()
         .find(|f| f.code == IncidentCode::LogUnbounded)
@@ -295,11 +318,26 @@ fn app_exceptions_thresholds() {
 }
 
 #[test]
-fn unhealthy_workload() {
+fn unhealthy_workload_while_running_with_what_the_check_said() {
+    let unhealthy = |r: &Report| {
+        findings(r, &Ctx::default()).into_iter().find(|f| f.code == IncidentCode::WorkloadUnhealthy)
+    };
     let mut r = base();
     r.workloads[APP].state.health = Some(Health::Unhealthy);
-    let found = severity_of(&r, &Ctx::default(), IncidentCode::WorkloadUnhealthy);
-    assert_eq!(found, Some(Severity::Critical));
+    let found = unhealthy(&r).unwrap();
+    assert_eq!(
+        (found.severity, found.detail.as_str()),
+        (Severity::Critical, "healthcheck failing")
+    );
+    let state = &mut r.workloads[APP].state;
+    state.health_failing_streak = Some(3471);
+    state.health_output = Some("exec: \"wget\": executable file not found".into());
+    assert_eq!(
+        unhealthy(&r).unwrap().detail,
+        "failing 3471 checks: exec: \"wget\": executable file not found"
+    );
+    (r.workloads[APP].state.run, r.workloads[APP].state.exit_code) = (RunState::Exited, Some(1));
+    assert!(unhealthy(&r).is_none(), "a stopped workload is down, not unhealthy");
 }
 
 fn incident(subject: Subject, severity: Severity, muted: bool) -> IncidentView {
@@ -318,12 +356,21 @@ fn incident(subject: Subject, severity: Severity, muted: bool) -> IncidentView {
 }
 
 #[test]
+fn statuses_order_by_urgency() {
+    let mut all = [Status::Critical, Status::Ok, Status::Unknown, Status::Warn];
+    all.sort();
+    assert_eq!(all, [Status::Ok, Status::Warn, Status::Unknown, Status::Critical]);
+    assert!(Status::Unknown > Status::Warn && Status::Unknown < Status::Critical);
+}
+
+#[test]
 fn rollup_ignores_muted_and_takes_the_worst() {
     let view = |severity, muted| incident(Subject::Host("x".into()), severity, muted);
     assert_eq!(rollup(&[]), Status::Ok);
     assert_eq!(rollup(&[view(Severity::Critical, true)]), Status::Ok);
     let mixed = [view(Severity::Warn, false), view(Severity::Critical, false)];
     assert_eq!(rollup(&mixed), Status::Critical);
+    assert_eq!(rollup(&[view(Severity::Info, false)]), Status::Ok, "hygiene only");
 }
 
 #[test]
@@ -337,7 +384,7 @@ fn a_workload_summary_counts_only_its_own_incidents() {
     ];
     let summary = |i: usize| {
         let w = &r.workloads[i];
-        workload_summary(w.key.clone(), w.facts.as_ref(), w.state.run, &incidents, BTreeMap::new())
+        workload_summary(w.key.clone(), w.facts.as_ref(), &w.state, &incidents, BTreeMap::new())
     };
     assert_eq!(summary(APP).status, Status::Warn);
     assert_eq!(summary(XRAY).status, Status::Ok);
@@ -366,6 +413,6 @@ fn at_most_one_finding_per_subject_and_code() {
     let found = run(&r, &Ctx::default());
     let unique: BTreeSet<_> = found.iter().map(|(s, c, _)| (s.clone(), *c)).collect();
     assert_eq!(unique.len(), found.len());
-    // 3 workloads × 5 workload rules + 1 mount + 1 host-wide LOG_UNBOUNDED
-    assert_eq!(found.len(), 17);
+    // 3 dead workloads × 4 rules (unhealthy needs a running one) + 1 mount + 1 host-wide
+    assert_eq!(found.len(), 14);
 }

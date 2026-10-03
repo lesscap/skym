@@ -5,7 +5,7 @@ mod group;
 mod line;
 #[cfg(test)]
 mod tests;
-mod text;
+pub(crate) mod text;
 mod traceback;
 
 pub use group::Grouper;
