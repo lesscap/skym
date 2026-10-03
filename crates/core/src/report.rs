@@ -30,10 +30,6 @@ pub struct Report {
     pub errors: Vec<String>,
     /// The reporting `skym`'s version, in every report (host facts carry it only now and then).
     pub agent_version: Option<String>,
-    /// Docker listed and inspected every container: a container missing here is gone. False
-    /// when Docker is disabled or anything failed, and from agents older than the field.
-    #[serde(default)]
-    pub containers_listed: bool,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]

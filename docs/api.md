@@ -37,8 +37,6 @@ token_sha256 = "…"
 | --- | --- | --- |
 | `GET /api` | How do I use this? | Endpoint descriptions |
 | `GET /api/overview` | Where is something wrong right now? | Customers → hosts with status, last report age and open, unmuted incidents; unhealthy hosts first |
-| `GET /api/apps` | Which applications exist, where, and are they up? | Every application (compose project, or lone container or systemd unit) with its name, environment, note, status, services, URLs, last deployment and open incidents; most urgent first |
-| `GET /api/apps/{host}/{project}` | What is this application, and how is it? | The application and its workloads; lone containers and systemd units at `/api/apps/{host}/{project}/{service}` |
 | `GET /api/hosts/{host}` | What is going on with this host? | Facts, state, workloads with their status, open incidents |
 | `GET /api/hosts/{host}/workloads/{project}/{service}` | What is going on with this application? | Facts, state, recent exception groups, recent events |
 | `GET /api/timeline` | When did it start, and what else happened? | Incident changes and events, merged and sorted by time |
@@ -47,8 +45,6 @@ token_sha256 = "…"
 | `GET /healthz` | Is the server up? | `ok`, no authentication |
 
 `{project}` is `-` for containers outside compose. Compose project names cannot be `-`, so there is no collision.
-
-Applications are discovered from the workloads hosts report; the configuration may describe them (`name`, `env`, `note`) and give them URLs to probe. A configured container application of which its host lists no container opens `APP_MISSING`. Follow an incident's or workload's `links.app` to its application.
 
 ### Parameters
 
@@ -144,4 +140,4 @@ Two responses do not use this shape yet: unknown paths (404) and report bodies o
 
 ## Compatibility
 
-The API has no version prefix. It follows the [evolution](architecture.md#evolution) rules: endpoints, fields and parameters are only added; clients ignore fields they do not know, and read enum values they do not know (a new incident code, severity or status) as `UNKNOWN` / `unknown`. A subject of a kind they do not know (a prefix other than `host:`, `workload:`, `mount:`, `endpoint:`, `app:`) is kept as it is.
+The API has no version prefix. It follows the [evolution](architecture.md#evolution) rules: endpoints, fields and parameters are only added; clients ignore fields they do not know, and read enum values they do not know (a new incident code, severity or status) as `UNKNOWN` / `unknown`.

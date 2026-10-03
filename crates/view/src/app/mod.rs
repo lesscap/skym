@@ -3,10 +3,8 @@
 
 use crate::api::{FetchError, Payload, Request};
 use jiff::{SignedDuration, Timestamp};
-use skym_core::subject::{AppKey, HostId, WorkloadKey};
-use skym_core::view::{
-    AppList, AppView, ExceptionList, HostView, IncidentList, Overview, Timeline, WorkloadView,
-};
+use skym_core::subject::{HostId, WorkloadKey};
+use skym_core::view::{ExceptionList, HostView, IncidentList, Overview, Timeline, WorkloadView};
 
 pub const REFRESH: SignedDuration = SignedDuration::from_secs(30);
 pub const WINDOWS: [&str; 3] = ["6h", "24h", "7d"];
@@ -46,8 +44,6 @@ pub enum Screen {
         workload: Option<WorkloadKey>,
         window: usize,
     },
-    Apps,
-    App(AppKey),
 }
 
 impl Screen {
@@ -62,8 +58,6 @@ impl Screen {
                 workload: workload.clone(),
                 since: WINDOWS[*window],
             }),
-            Screen::Apps => Some(Request::Apps),
-            Screen::App(a) => Some(Request::App(a.clone())),
         }
     }
 }
@@ -111,8 +105,6 @@ pub struct App {
     pub workload: Data<WorkloadView>,
     pub exceptions: Data<ExceptionList>,
     pub timeline: Data<Timeline>,
-    pub apps: Data<AppList>,
-    pub app: Data<AppView>,
     pub pane: Pane,
     /// 0 is "All hosts", then `targets()` in order.
     pub host_cursor: usize,
@@ -120,8 +112,6 @@ pub struct App {
     pub editing: bool,
     pub show_info: bool,
     pub show_muted: bool,
-    /// On the applications page: every environment unfolded.
-    pub all_envs: bool,
     pub help: bool,
     /// The last failure; the data stays as it was.
     pub error: Option<FetchError>,
@@ -141,15 +131,12 @@ impl Default for App {
             workload: Data::default(),
             exceptions: Data::default(),
             timeline: Data::default(),
-            apps: Data::default(),
-            app: Data::default(),
             pane: Pane::Hosts,
             host_cursor: 0,
             filter: None,
             editing: false,
             show_info: false,
             show_muted: false,
-            all_envs: false,
             help: false,
             error: None,
             last_refresh: None,
@@ -210,8 +197,6 @@ impl App {
             Payload::Workload(v) => self.workload.set(v, now),
             Payload::Exceptions(v) => self.exceptions.set(v, now),
             Payload::Timeline(v) => self.timeline.set(v, now),
-            Payload::Apps(v) => self.apps.set(v, now),
-            Payload::App(v) => self.app.set(v, now),
         }
     }
 }

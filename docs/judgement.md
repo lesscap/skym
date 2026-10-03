@@ -60,7 +60,6 @@ N and M count reports, not minutes: the times below assume the default 60-second
 | `REPLICATION_LAG` | Lag > 30 seconds | critical at > 5 minutes | Lag < 10 seconds for 5 minutes |
 | `ENDPOINT_DOWN` | 2 consecutive probes get no answer (connection, TLS, 10 s timeout) or a status other than expected: by default 400 or above, else one listed in `expect` | critical for no answer or 5xx; warn otherwise | 2 consecutive good probes |
 | `CERT_EXPIRING` | The certificate of an https answer expires within 14 days | critical within 7 days or expired | A certificate expiring later is served |
-| `APP_MISSING` | A configured container application has none of its containers, not even a stopped one, in 2 consecutive reports that listed every container (`containers_listed`). Not judged otherwise, nor while the host is silent; a systemd unit's absence is `WORKLOAD_DOWN` | critical when `env = "prod"`, else warn | 1 complete listing with it; removing it from the configuration retires the incident |
 | `APP_EXCEPTIONS` | Within 15 minutes: `final_count` ≥ 5, or non-final count ≥ 50, or `_stderr` count ≥ 10 | critical at `final_count` ≥ 20 | Below every threshold for 30 minutes |
 
 Notes:

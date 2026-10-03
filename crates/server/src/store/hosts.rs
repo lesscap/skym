@@ -124,25 +124,16 @@ pub fn stored_facts(c: &Connection, host: &str) -> rusqlite::Result<BTreeMap<Wor
 
 /// The host's workloads that are not archived.
 pub fn workloads(c: &Connection, host: &str) -> rusqlite::Result<Vec<WorkloadRow>> {
-    workload_rows(c, Some(host))
-}
-
-/// Every host's workloads that are not archived.
-pub fn all_workloads(c: &Connection) -> rusqlite::Result<Vec<WorkloadRow>> {
-    workload_rows(c, None)
-}
-
-fn workload_rows(c: &Connection, host: Option<&str>) -> rusqlite::Result<Vec<WorkloadRow>> {
     let mut stmt = c.prepare(
-        "SELECT host, project, service, facts_json, state_json, last_seen FROM workloads
-         WHERE (?1 IS NULL OR host = ?1) AND archived_at IS NULL ORDER BY host, project, service",
+        "SELECT project, service, facts_json, state_json, last_seen FROM workloads
+         WHERE host = ?1 AND archived_at IS NULL ORDER BY project, service",
     )?;
     let rows = stmt.query_map([host], |r| {
         Ok(WorkloadRow {
-            key: WorkloadKey { host: r.get(0)?, project: r.get(1)?, service: r.get(2)? },
-            facts: r.get::<_, Option<String>>(3)?.map(|f| from_json(&f)).transpose()?,
-            state: from_json(&r.get::<_, String>(4)?)?,
-            last_seen: parsed(r.get(5)?)?,
+            key: WorkloadKey { host: host.to_string(), project: r.get(0)?, service: r.get(1)? },
+            facts: r.get::<_, Option<String>>(2)?.map(|f| from_json(&f)).transpose()?,
+            state: from_json(&r.get::<_, String>(3)?)?,
+            last_seen: parsed(r.get(4)?)?,
         })
     })?;
     rows.collect()

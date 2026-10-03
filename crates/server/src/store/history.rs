@@ -41,21 +41,6 @@ pub fn events(
     rows.collect()
 }
 
-/// When each workload was last deployed, as far as the stored events go back.
-pub fn last_deployed(c: &Connection) -> rusqlite::Result<BTreeMap<WorkloadKey, Timestamp>> {
-    let mut stmt =
-        c.prepare("SELECT subject, MAX(ts) FROM events WHERE kind = 'deployed' GROUP BY subject")?;
-    let rows = stmt.query_map([], |r| Ok((parsed::<Subject>(r.get(0)?)?, parsed(r.get(1)?)?)))?;
-    let all: Vec<(Subject, Timestamp)> = rows.collect::<rusqlite::Result<_>>()?;
-    Ok(all
-        .into_iter()
-        .filter_map(|(s, t)| match s {
-            Subject::Workload(k) => Some((k, t)),
-            _ => None,
-        })
-        .collect())
-}
-
 /// OOM kills in `[from, to]`, as the judge expects them.
 pub fn oom_kills(
     c: &Connection,

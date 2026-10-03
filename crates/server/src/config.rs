@@ -6,7 +6,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use skym_core::rules::IncidentCode;
-use skym_core::subject::{AppKey, CustomerId, HostId, Subject};
+use skym_core::subject::{CustomerId, HostId, Subject};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
@@ -24,7 +24,6 @@ pub struct ServerConfig {
     pub readers: Vec<Reader>,
     pub mute: Vec<Mute>,
     pub endpoints: Vec<Endpoint>,
-    pub apps: Vec<AppConfig>,
 }
 
 impl Default for ServerConfig {
@@ -38,7 +37,6 @@ impl Default for ServerConfig {
             readers: Vec::new(),
             mute: Vec::new(),
             endpoints: Vec::new(),
-            apps: Vec::new(),
         }
     }
 }
@@ -72,74 +70,24 @@ pub struct Mute {
 
 /// A URL the server probes. `expect` replaces the default "below 400" when set; `headers`
 /// may hold a token for the probe, so their values never leave the configuration.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct Endpoint {
     pub url: String,
     pub customer: CustomerId,
     #[serde(default)]
     pub expect: Vec<u16>,
     #[serde(default)]
-    pub headers: Headers,
-    /// Set for an application's probe (see `ServerConfig::probed`), never in `[[endpoints]]`.
-    #[serde(skip)]
-    pub app: Option<AppKey>,
+    pub headers: BTreeMap<String, String>,
 }
 
-/// Request headers of a probe. They may hold a token, so `Debug` shows only their names.
-#[derive(Deserialize, Clone, Default)]
-#[serde(transparent)]
-pub struct Headers(pub BTreeMap<String, String>);
-
-impl std::ops::Deref for Headers {
-    type Target = BTreeMap<String, String>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl fmt::Debug for Headers {
+impl fmt::Debug for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.0.keys()).finish()
-    }
-}
-
-/// An application the operator cares about: described, probed, and missed when it is gone.
-#[derive(Deserialize, Debug, Clone)]
-pub struct AppConfig {
-    pub id: AppKey,
-    pub name: Option<String>,
-    pub env: Option<String>,
-    pub note: Option<String>,
-    #[serde(default)]
-    pub probes: Vec<AppProbe>,
-}
-
-/// One of an application's URLs; its customer is its host's.
-#[derive(Deserialize, Debug, Clone)]
-pub struct AppProbe {
-    pub url: String,
-    #[serde(default)]
-    pub expect: Vec<u16>,
-    #[serde(default)]
-    pub headers: Headers,
-}
-
-impl ServerConfig {
-    /// Every URL to probe: `[[endpoints]]`, then each application's probes.
-    pub fn probed(&self) -> Vec<Endpoint> {
-        let customer =
-            |host: &str| self.hosts.iter().find(|h| h.id == host).map(|h| h.customer.clone());
-        let of_apps = self.apps.iter().flat_map(|a| {
-            a.probes.iter().map(|p| Endpoint {
-                url: p.url.clone(),
-                customer: customer(&a.id.host).unwrap_or_default(),
-                expect: p.expect.clone(),
-                headers: p.headers.clone(),
-                app: Some(a.id.clone()),
-            })
-        });
-        self.endpoints.iter().cloned().chain(of_apps).collect()
+        f.debug_struct("Endpoint")
+            .field("url", &self.url)
+            .field("customer", &self.customer)
+            .field("expect", &self.expect)
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .finish()
     }
 }
 
@@ -190,17 +138,8 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
     if let Some(m) = cfg.mute.iter().find(|m| m.code == IncidentCode::Unknown) {
         bail!("mute for {} names an unknown incident code", m.subject);
     }
-    let mut apps = BTreeSet::new();
-    for a in &cfg.apps {
-        if !cfg.hosts.iter().any(|h| h.id == a.id.host) || !apps.insert(&a.id) {
-            bail!("app {} is on an unknown host or listed twice", a.id);
-        }
-    }
-    if let Some(m) = cfg.mute.iter().find(|m| matches!(m.subject, Subject::Unknown(_))) {
-        bail!("mute names an unknown kind of subject: {}", m.subject);
-    }
     let mut urls = BTreeSet::new();
-    for e in &cfg.probed() {
+    for e in &cfg.endpoints {
         let url = validate_endpoint(e, &customers)?;
         if !urls.insert(url) {
             bail!("endpoint {} is listed twice", e.url);
@@ -224,7 +163,7 @@ fn validate_endpoint(e: &Endpoint, customers: &BTreeSet<&str>) -> anyhow::Result
     if let Some(s) = e.expect.iter().find(|s| !(100..=599).contains(*s)) {
         bail!("endpoint {} expects {s}, which is not an HTTP status", e.url);
     }
-    for (name, value) in e.headers.iter() {
+    for (name, value) in &e.headers {
         HeaderName::from_bytes(name.as_bytes())
             .with_context(|| format!("endpoint {}: header name {name:?}", e.url))?;
         // The value is a secret: never in an error message.
@@ -341,61 +280,6 @@ mod tests {
             parse(&endpoint("url = \"https://a.example/\"\nheaders = { X-Token = \"s3cret\\n\" }"))
                 .unwrap_err();
         assert!(!format!("{err:#}").contains("s3cret"), "a bad value is never echoed");
-    }
-
-    fn with_app(app: &str) -> String {
-        config(&(host("x", "acme", &hash('a')) + app))
-    }
-
-    #[test]
-    fn apps_parse_and_their_probes_join_the_endpoints() {
-        let cfg = parse(&with_app(
-            "[[apps]]\nid = \"x/shop\"\nname = \"Shop\"\nenv = \"prod\"\n\
-             [[apps.probes]]\nurl = \"https://shop.example.com/healthz\"\n\
-             headers = { Authorization = \"Bearer s3cret\" }\n\
-             [[apps]]\nid = \"x/-/redis\"\n\
-             [[endpoints]]\nurl = \"https://partner.example.com/\"\ncustomer = \"acme\"\n",
-        ))
-        .unwrap();
-        let probed = cfg.probed();
-        let summary: Vec<(&str, &str, Option<String>)> = probed
-            .iter()
-            .map(|e| (e.url.as_str(), e.customer.as_str(), e.app.as_ref().map(ToString::to_string)))
-            .collect();
-        assert_eq!(
-            summary,
-            [
-                ("https://partner.example.com/", "acme", None),
-                ("https://shop.example.com/healthz", "acme", Some("x/shop".into())),
-            ],
-            "an app's probe takes its host's customer"
-        );
-        assert_eq!(probed[1].headers["Authorization"], "Bearer s3cret");
-        let shown = format!("{cfg:?}");
-        assert!(shown.contains("Authorization") && !shown.contains("s3cret"), "{shown}");
-    }
-
-    #[test]
-    fn invalid_apps_are_rejected() {
-        let cases = [
-            with_app("[[apps]]\nid = \"x\"\n"),
-            with_app("[[apps]]\nid = \"x/-\"\n"),
-            with_app("[[apps]]\nid = \"y/shop\"\n"),
-            with_app("[[apps]]\nid = \"x/shop\"\n[[apps]]\nid = \"x/shop\"\n"),
-            with_app(
-                "[[apps]]\nid = \"x/shop\"\n[[apps.probes]]\nurl = \"https://a.example/\"\n\
-                 [[endpoints]]\nurl = \"https://a.example\"\ncustomer = \"acme\"\n",
-            ),
-            with_app("[[apps]]\nid = \"x/shop\"\n[[apps.probes]]\nurl = \"ftp://a.example/\"\n"),
-            with_app("[[mute]]\nsubject = \"queue:mail\"\ncode = \"WORKLOAD_DOWN\"\n"),
-        ];
-        for text in &cases {
-            assert!(parse(text).is_err(), "should be rejected:\n{text}");
-        }
-        assert!(
-            parse(&with_app("[[mute]]\nsubject = \"app:x/shop\"\ncode = \"APP_MISSING\"\n"))
-                .is_ok()
-        );
     }
 
     #[test]

@@ -1,10 +1,7 @@
 use super::*;
 use skym_core::rules::{IncidentCode, Severity};
-use skym_core::subject::{AppKey, Subject};
-use skym_core::view::{
-    AppList, AppSummary, AppView, CustomerOverview, EndpointOverview, HostOverview, IncidentView,
-    Status, WorkloadSummary,
-};
+use skym_core::subject::Subject;
+use skym_core::view::{CustomerOverview, EndpointOverview, HostOverview, IncidentView, Status};
 use std::collections::BTreeMap;
 
 fn t(sec: i64) -> Timestamp {
@@ -327,7 +324,6 @@ fn with_endpoint() -> App {
         latency_ms: Some(80),
         cert_expires_at: None,
         incidents: vec![incident(&format!("endpoint:{url}"))],
-        app: None,
     }];
     let mut app = App::default();
     update(&mut app, Msg::Fetched(Request::Overview, Ok(Box::new(Payload::Overview(o)))), t(1));
@@ -356,114 +352,4 @@ fn the_hosts_filter_finds_endpoints_by_their_address() {
         &[Key::Char('/'), Key::Char('s'), Key::Char('h'), Key::Char('o'), Key::Char('p')],
     );
     assert_eq!(app.targets(), [Subject::Endpoint("https://shop.example.com/".into())]);
-}
-
-fn summary(key: &str, env: Option<&str>, status: Status) -> AppSummary {
-    AppSummary {
-        key: key.parse().unwrap(),
-        name: key.rsplit('/').next().unwrap().into(),
-        env: env.map(String::from),
-        note: None,
-        configured: env.is_some(),
-        status,
-        services: 1,
-        running: 1,
-        last_deployed: None,
-        endpoints: vec![],
-        incidents: vec![],
-        links: BTreeMap::new(),
-    }
-}
-
-#[test]
-fn applications_open_from_anywhere_and_lead_to_their_services() {
-    let mut app = loaded();
-    assert_eq!(press(&mut app, &[Key::Char('a')]), [Request::Apps]);
-    assert!(press(&mut app, &[Key::Char('a')]).is_empty(), "already there");
-    let list = AppList {
-        apps: vec![
-            summary("y/shop", Some("prod"), Status::Ok),
-            summary("y/shop-test", Some("test"), Status::Ok),
-            summary("x/blog", Some("test"), Status::Critical),
-        ],
-    };
-    update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(list)))), t(2));
-    let names = |app: &App| app.app_rows().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
-    assert_eq!(names(&app), ["shop", "blog"], "test is folded, its trouble still shown");
-    press(&mut app, &[Key::Char('e')]);
-    assert_eq!(names(&app), ["shop", "blog", "shop-test"]);
-    press(&mut app, &[Key::Char('/'), Key::Char('b'), Key::Enter]);
-    assert_eq!(names(&app), ["blog"]);
-    let blog: AppKey = "x/blog".parse().unwrap();
-    assert_eq!(press(&mut app, &[Key::Enter]), [Request::App(blog.clone())]);
-
-    let key = WorkloadKey { host: "x".into(), project: "blog".into(), service: "web".into() };
-    let view = AppView {
-        app: summary("x/blog", Some("test"), Status::Critical),
-        workloads: vec![WorkloadSummary {
-            key: key.clone(),
-            kind: None,
-            status: Status::Critical,
-            run: skym_core::model::RunState::Exited,
-            exit_code: Some(1),
-            state_since: None,
-            image: None,
-            links: BTreeMap::new(),
-        }],
-    };
-    update(&mut app, Msg::Fetched(Request::App(blog), Ok(Box::new(Payload::App(view)))), t(3));
-    assert_eq!(app.services().len(), 1, "the services are the app's");
-    assert_eq!(press(&mut app, &[Key::Enter]), [Request::Workload(key)]);
-    assert!(press(&mut app, &[Key::Esc]).is_empty(), "the app's own data is still current");
-    press(&mut app, &[Key::Esc]);
-    assert_eq!(app.frame().screen, Screen::Apps);
-    assert_eq!(app.frame().cursor, 0, "back where it was");
-}
-
-#[test]
-fn going_back_reads_a_screen_again_when_its_data_moved_on() {
-    let mut app = loaded();
-    let api = workload_view().key; // x/app/api
-    let other = WorkloadKey { service: "web".into(), ..api.clone() };
-    let fetched = |app: &mut App, view: WorkloadView| {
-        let request = Request::Workload(view.key.clone());
-        update(app, Msg::Fetched(request, Ok(Box::new(Payload::Workload(view)))), t(3));
-    };
-    press(&mut app, &[Key::Tab, Key::Up, Key::Enter]); // the problem's service: x/app/api
-    fetched(&mut app, workload_view());
-    press(&mut app, &[Key::Char('a')]);
-    app.stack.push(Frame { screen: Screen::Workload(other.clone()), cursor: 0, expanded: None });
-    fetched(&mut app, WorkloadView { key: other, ..workload_view() });
-    assert!(press(&mut app, &[Key::Esc]).is_empty(), "the apps page holds its own data");
-    assert_eq!(press(&mut app, &[Key::Esc]), [Request::Workload(api)], "web's data, api's screen");
-    assert!(app.workload.value.is_none(), "not shown meanwhile");
-}
-
-#[test]
-fn the_applications_page_is_not_opened_twice() {
-    let mut app = loaded();
-    press(&mut app, &[Key::Char('a')]);
-    app.stack.push(Frame {
-        screen: Screen::App("x/app".parse().unwrap()),
-        cursor: 0,
-        expanded: None,
-    });
-    app.filter = Some("x".into());
-    assert_eq!(press(&mut app, &[Key::Char('a')]), [Request::Apps]);
-    assert_eq!((app.stack.len(), app.frame().screen.clone()), (2, Screen::Apps));
-    assert!(app.filter.is_none());
-}
-
-#[test]
-fn going_back_to_the_same_host_reads_nothing_again() {
-    let mut app = loaded();
-    press(&mut app, &[Key::Down, Key::Enter]);
-    update(
-        &mut app,
-        Msg::Fetched(Request::Host("x".into()), Ok(Box::new(Payload::Host(host_view())))),
-        t(3),
-    );
-    press(&mut app, &[Key::Enter]);
-    assert!(press(&mut app, &[Key::Esc]).is_empty(), "the host's data is its own");
-    assert!(app.host.value.is_some());
 }

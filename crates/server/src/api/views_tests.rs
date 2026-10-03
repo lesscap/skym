@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{Customer, Endpoint, Headers, HostEntry};
+use crate::config::{Customer, Endpoint, HostEntry};
 use crate::probe::Probe;
 use skym_core::model::EventKind;
 use skym_core::rules::{IncidentCode, Severity};
@@ -129,7 +129,7 @@ fn overview_ranks_hosts_and_ignores_muted_incidents() {
             at(5),
         ),
     ];
-    let o = overview(&cfg, &cfg.probed(), &seen, &BTreeMap::new(), &open, at(5));
+    let o = overview(&cfg, &seen, &BTreeMap::new(), &open, at(5));
     let hosts: Vec<(&str, Status)> =
         o.customers[0].hosts.iter().map(|h| (h.id.as_str(), h.status)).collect();
     assert_eq!(
@@ -149,7 +149,7 @@ fn overview_ranks_hosts_and_ignores_muted_incidents() {
         "info is listed, not counted"
     );
     assert_eq!(o.customers[0].hosts[0].observed_since, Some(at(-60)));
-    let calm = overview(&cfg, &cfg.probed(), &seen, &BTreeMap::new(), &open[2..], at(5));
+    let calm = overview(&cfg, &seen, &BTreeMap::new(), &open[2..], at(5));
     assert_eq!(calm.status, Status::Unknown, "a host that never reported outranks warnings");
 }
 
@@ -159,8 +159,7 @@ fn endpoints_list_under_their_customer_and_count_to_its_status() {
         url: url.into(),
         customer: customer.into(),
         expect: vec![],
-        headers: Headers::default(),
-        app: None,
+        headers: BTreeMap::new(),
     };
     let cfg = ServerConfig {
         customers: vec![
@@ -196,7 +195,7 @@ fn endpoints_list_under_their_customer_and_count_to_its_status() {
     let down =
         incident("endpoint:https://b.example", IncidentCode::EndpointDown, Severity::Critical);
     let open = [incident_view(&down, &[], &BTreeMap::new(), at(5))];
-    let o = overview(&cfg, &cfg.probed(), &BTreeMap::new(), &probes, &open, at(5));
+    let o = overview(&cfg, &BTreeMap::new(), &probes, &open, at(5));
     let acme: Vec<(&str, Status)> =
         o.customers[0].endpoints.iter().map(|e| (e.url.as_str(), e.status)).collect();
     assert_eq!(

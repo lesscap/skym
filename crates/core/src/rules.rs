@@ -22,7 +22,6 @@ pub enum IncidentCode {
     EndpointDown,
     CertExpiring,
     AppExceptions,
-    AppMissing,
     #[serde(other)]
     Unknown,
 }
@@ -42,7 +41,7 @@ pub enum Severity {
 }
 
 impl IncidentCode {
-    pub const ALL: [IncidentCode; 13] = [
+    pub const ALL: [IncidentCode; 12] = [
         IncidentCode::HeartbeatLost,
         IncidentCode::WorkloadDown,
         IncidentCode::WorkloadUnhealthy,
@@ -55,7 +54,6 @@ impl IncidentCode {
         IncidentCode::EndpointDown,
         IncidentCode::CertExpiring,
         IncidentCode::AppExceptions,
-        IncidentCode::AppMissing,
     ];
 
     /// The wire name, as serialized.
@@ -73,7 +71,6 @@ impl IncidentCode {
             IncidentCode::EndpointDown => "ENDPOINT_DOWN",
             IncidentCode::CertExpiring => "CERT_EXPIRING",
             IncidentCode::AppExceptions => "APP_EXCEPTIONS",
-            IncidentCode::AppMissing => "APP_MISSING",
             IncidentCode::Unknown => "UNKNOWN",
         }
     }
@@ -135,7 +132,6 @@ pub const fn rule(code: IncidentCode) -> Rule {
     use IncidentCode::*;
     let (open_after, resolve_after, decay_to_warn_after) = match code {
         WorkloadDown | DatastoreUnreachable | EndpointDown => (2, 2, None),
-        AppMissing => (2, 1, None),
         WorkloadUnhealthy => (2, 2, Some(SignedDuration::from_hours(24))),
         ReplicationLag => (1, 5, None),
         AppExceptions => (1, 30, None),

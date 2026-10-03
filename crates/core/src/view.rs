@@ -5,7 +5,7 @@ use crate::model::{
     WorkloadState,
 };
 use crate::rules::{IncidentCode, Severity};
-use crate::subject::{AppKey, CustomerId, HostId, Subject, WorkloadKey};
+use crate::subject::{CustomerId, HostId, Subject, WorkloadKey};
 use crate::time::Timestamp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -151,9 +151,6 @@ pub struct EndpointOverview {
     pub cert_expires_at: Option<Timestamp>,
     #[serde(default)]
     pub incidents: Vec<IncidentView>,
-    /// The application this URL probes, when it is one of an app's probes.
-    #[serde(default)]
-    pub app: Option<AppKey>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -176,49 +173,6 @@ pub struct Overview {
     pub customers: Vec<CustomerOverview>,
     #[serde(default)]
     pub muted_count: u32,
-}
-
-/// One application: discovered from its workloads, described by the configuration.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
-pub struct AppSummary {
-    pub key: AppKey,
-    /// The configured name, else the project (or the lone service).
-    pub name: String,
-    /// Free text from the configuration; `prod`, `pre` and `test` are the usual ones.
-    pub env: Option<String>,
-    pub note: Option<String>,
-    /// Listed in the configuration: skym raises `APP_MISSING` when it disappears.
-    #[serde(default)]
-    pub configured: bool,
-    pub status: Status,
-    #[serde(default)]
-    pub services: u32,
-    #[serde(default)]
-    pub running: u32,
-    #[serde(default)]
-    pub last_deployed: Option<Timestamp>,
-    /// Its probes.
-    #[serde(default)]
-    pub endpoints: Vec<EndpointOverview>,
-    /// Open, unmuted incidents of its workloads, its probes and the app itself.
-    #[serde(default)]
-    pub incidents: Vec<IncidentView>,
-    #[serde(default)]
-    pub links: BTreeMap<String, String>,
-}
-
-/// `GET /api/apps`.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
-pub struct AppList {
-    pub apps: Vec<AppSummary>,
-}
-
-/// `GET /api/apps/{host}/{project}[/{service}]`.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
-pub struct AppView {
-    pub app: AppSummary,
-    #[serde(default)]
-    pub workloads: Vec<WorkloadSummary>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]

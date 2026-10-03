@@ -12,8 +12,6 @@ impl App {
             Screen::Workload(_) => self.workload = Data::default(),
             Screen::Exceptions(_) => self.exceptions = Data::default(),
             Screen::Timeline { .. } => self.timeline = Data::default(),
-            Screen::Apps => self.apps = Data::default(),
-            Screen::App(_) => self.app = Data::default(),
             Screen::Overview => {}
         }
         let request = screen.request();
@@ -36,10 +34,9 @@ impl App {
                     _ => Some(Screen::Host(r.host.to_string())),
                 })
             }
-            (Screen::Host(_) | Screen::App(_), _) => {
+            (Screen::Host(_), _) => {
                 self.services().get(cursor).map(|w| Screen::Workload(w.key.clone()))
             }
-            (Screen::Apps, _) => self.app_rows().get(cursor).map(|a| Screen::App(a.key.clone())),
             (Screen::Workload(_) | Screen::Exceptions(_), _) => {
                 let frame = self.frame_mut();
                 frame.expanded = (frame.expanded != Some(cursor)).then_some(cursor);
@@ -73,43 +70,9 @@ impl App {
         self.frame().screen.request().into_iter().collect()
     }
 
-    /// Clears the filter, or returns to the screen below, reading it again if what is held
-    /// now belongs to another host, service or application (or cannot tell).
-    fn back(&mut self) -> Vec<Request> {
-        if self.filter.take().is_some() || self.stack.len() == 1 {
-            return Vec::new();
-        }
-        self.stack.pop();
-        let stale = match &self.frame().screen {
-            Screen::Overview | Screen::Apps => false,
-            Screen::Host(h) => self.host.value.as_ref().is_some_and(|v| v.id != *h),
-            Screen::Workload(k) => self.workload.value.as_ref().is_some_and(|v| v.key != *k),
-            Screen::App(a) => self.app.value.as_ref().is_some_and(|v| v.app.key != *a),
-            Screen::Exceptions(_) | Screen::Timeline { .. } => true,
-        };
-        if !stale {
-            return Vec::new();
-        }
-        match &self.frame().screen {
-            Screen::Host(_) => self.host = Data::default(),
-            Screen::Workload(_) => self.workload = Data::default(),
-            Screen::App(_) => self.app = Data::default(),
-            Screen::Exceptions(_) => self.exceptions = Data::default(),
-            Screen::Timeline { .. } => self.timeline = Data::default(),
-            Screen::Overview | Screen::Apps => {}
-        }
-        self.frame().screen.request().into_iter().collect()
-    }
-
-    /// The applications page, where it already is in the stack, else opened.
-    fn apps(&mut self) -> Vec<Request> {
-        match self.stack.iter().position(|f| f.screen == Screen::Apps) {
-            Some(i) => {
-                self.stack.truncate(i + 1);
-                self.filter = None;
-                vec![Request::Apps]
-            }
-            None => self.open(Screen::Apps),
+    fn back(&mut self) {
+        if self.filter.take().is_none() && self.stack.len() > 1 {
+            self.stack.pop();
         }
     }
 
@@ -162,18 +125,16 @@ impl App {
                 }
             }
             Key::Char('t') => return self.timeline(),
-            Key::Char('e') => match &self.frame().screen {
-                Screen::Host(h) => return self.open(Screen::Exceptions(h.clone())),
-                Screen::Apps => (self.all_envs, self.frame_mut().cursor) = (!self.all_envs, 0),
-                _ => {}
-            },
-            Key::Char('a') if self.frame().screen != Screen::Apps => return self.apps(),
+            Key::Char('e') => {
+                if let Screen::Host(h) = &self.frame().screen {
+                    return self.open(Screen::Exceptions(h.clone()));
+                }
+            }
             Key::Char('[') => return self.shift_window(-1),
             Key::Char(']') => return self.shift_window(1),
             Key::Esc | Key::Backspace => {
-                let requests = self.back();
+                self.back();
                 self.clamp_host_cursor();
-                return requests;
             }
             Key::Tab if self.frame().screen == Screen::Overview => {
                 self.pane = match self.pane {

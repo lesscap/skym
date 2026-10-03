@@ -27,9 +27,6 @@ pub async fn collect(host: &str, units: &[SystemdUnit]) -> (Vec<Unit>, Vec<Strin
     for unit in units {
         let shown = show(&unit.unit).await.and_then(|s| {
             let props = parse_show(&s);
-            if not_found(&props) {
-                errors.push(format!("systemd {}: unit not found", unit.unit));
-            }
             Ok((unit_state(&props)?, restart_count(&props)))
         });
         match shown {
@@ -102,15 +99,9 @@ pub fn parse_show(s: &str) -> BTreeMap<&str, &str> {
     s.lines().filter_map(|l| l.split_once('=')).collect()
 }
 
-/// A declared unit that does not exist (removed, or misspelled in the configuration).
-pub fn not_found(props: &BTreeMap<&str, &str>) -> bool {
-    props.get("LoadState") == Some(&"not-found")
-}
-
-/// A unit that does not exist is reported as not running, so it raises `WORKLOAD_DOWN`.
 pub fn unit_state(props: &BTreeMap<&str, &str>) -> Result<(RunState, Option<u64>), String> {
-    if not_found(props) {
-        return Ok((RunState::Inactive, None));
+    if props.get("LoadState") == Some(&"not-found") {
+        return Err("unit not found".into());
     }
     let run = match (props.get("ActiveState").copied(), props.get("SubState").copied()) {
         (Some("active" | "reloading"), _) => RunState::Running,
@@ -188,9 +179,7 @@ mod tests {
         );
         assert_eq!(state("ActiveState=deactivating\n"), Ok((RunState::Restarting, None)));
         assert_eq!(state("ActiveState=inactive\n"), Ok((RunState::Inactive, None)));
-        let gone = parse_show("LoadState=not-found\nActiveState=inactive\n");
-        assert_eq!(unit_state(&gone), Ok((RunState::Inactive, None)), "a removed unit is down");
-        assert!(not_found(&gone) && !not_found(&parse_show("LoadState=loaded\n")));
+        assert!(state("LoadState=not-found\nActiveState=inactive\n").is_err());
     }
 
     #[test]

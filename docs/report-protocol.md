@@ -33,7 +33,6 @@ struct Report {
     exceptions: Vec<ExceptionGroup>,   // groups observed since the previous report
     errors: Vec<String>,               // sources that failed in this pass
     agent_version: Option<String>,     // the reporting skym's version
-    containers_listed: bool,           // Docker listed and inspected every container (default false)
 }
 
 struct WorkloadReport {
@@ -46,7 +45,7 @@ struct WorkloadReport {
 
 Entity fields are defined in the [domain model](domain-model.md).
 
-When a source fails (for example, no access to the Docker socket), the report lists it in `errors`. The server then treats subjects missing from the report as unknown, not as recovered: their incidents stay as they are. `containers_listed` is narrower: it says every container was listed and inspected, so one missing from the report is gone. Only then does the server judge `APP_MISSING`; reports from agents older than the field read as `false`.
+When a source fails (for example, no access to the Docker socket), the report lists it in `errors`. The server then treats subjects missing from the report as unknown, not as recovered: their incidents stay as they are.
 
 A facts hash is the first 8 bytes of SHA-256 over the facts' JSON form, written as 16 lowercase hex characters. A string keeps it exact for every JSON consumer.
 

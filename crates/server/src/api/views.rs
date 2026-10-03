@@ -8,7 +8,7 @@ use crate::store::probes::ProbeRow;
 use jiff::{SignedDuration, Timestamp};
 use skym_core::model::{Event, ExceptionGroup};
 use skym_core::rules::{IncidentCode, Severity};
-use skym_core::subject::{AppKey, CustomerId, HostId, Subject, WorkloadKey};
+use skym_core::subject::{CustomerId, HostId, Subject, WorkloadKey};
 use skym_core::time::format_duration;
 use skym_core::view::{
     CustomerOverview, EndpointOverview, HostOverview, HostView, IncidentView, Overview, Status,
@@ -78,21 +78,10 @@ pub fn links(subject: &Subject) -> BTreeMap<String, String> {
                     format!("/api/exceptions?host={h}&workload={p}/{s}&since=1h"),
                 ),
                 ("incidents".to_string(), format!("/api/incidents?host={h}")),
-                ("app".to_string(), app_link(&AppKey::of(k))),
             ])
         }
-        Subject::App(a) => BTreeMap::from([
-            ("app".to_string(), app_link(a)),
-            ("host".to_string(), format!("/api/hosts/{}", encode(&a.host))),
-        ]),
-        Subject::Endpoint(_) | Subject::Unknown(_) => BTreeMap::new(),
+        Subject::Endpoint(_) => BTreeMap::new(),
     }
-}
-
-/// Where an application's view is.
-pub fn app_link(a: &AppKey) -> String {
-    let service = a.service.as_ref().map_or(String::new(), |s| format!("/{}", encode(s)));
-    format!("/api/apps/{}/{}{service}", encode(&a.host), encode(&a.project))
 }
 
 /// Percent-encodes everything but unreserved characters (a replica is `api#2`).
@@ -171,7 +160,6 @@ pub struct Seen {
 /// Customers in configuration order; within each, the most urgent hosts and endpoints first.
 pub fn overview(
     cfg: &ServerConfig,
-    probed: &[Endpoint],
     seen: &BTreeMap<HostId, Seen>,
     probes: &BTreeMap<String, ProbeRow>,
     open: &[IncidentView],
@@ -203,7 +191,8 @@ pub fn overview(
                 })
                 .collect();
             hosts.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.id.cmp(&b.id)));
-            let mut endpoints: Vec<EndpointOverview> = probed
+            let mut endpoints: Vec<EndpointOverview> = cfg
+                .endpoints
                 .iter()
                 .filter(|e| e.customer == c.id)
                 .map(|e| endpoint(e, probes.get(&e.url), open, cfg.report_interval, now))
@@ -229,7 +218,7 @@ pub fn overview(
 
 /// One endpoint with its unmuted open incidents; `row` is `None` until it is first probed.
 /// A probe older than three intervals says nothing about now: the probes have stopped.
-pub fn endpoint(
+fn endpoint(
     e: &Endpoint,
     row: Option<&ProbeRow>,
     open: &[IncidentView],
@@ -249,7 +238,6 @@ pub fn endpoint(
         latency_ms: answered.map(|r| r.probe.latency_ms),
         cert_expires_at: answered.and_then(|r| r.probe.cert_not_after),
         incidents: mine,
-        app: e.app.clone(),
     }
 }
 

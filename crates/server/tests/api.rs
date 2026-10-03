@@ -10,9 +10,7 @@ use serde_json::Value;
 use skym_core::model::RunState;
 use skym_core::report::Report;
 use skym_server::api::{AppState, router};
-use skym_server::config::{
-    AppConfig, AppProbe, Customer, Headers, HostEntry, Mute, Reader, ServerConfig, sha256_hex,
-};
+use skym_server::config::{Customer, HostEntry, Mute, Reader, ServerConfig, sha256_hex};
 use skym_server::evaluate::heartbeat_once;
 use skym_server::{db, store::Store};
 use std::io::Write;
@@ -26,13 +24,8 @@ fn app() -> (Router, AppState) {
 }
 
 fn app_with(mute: Vec<Mute>) -> (Router, AppState) {
-    app_configured(mute, vec![])
-}
-
-fn app_configured(mute: Vec<Mute>, apps: Vec<AppConfig>) -> (Router, AppState) {
     let cfg = ServerConfig {
         mute,
-        apps,
         customers: vec![Customer { id: "acme".into(), name: "Acme".into() }],
         hosts: vec![HostEntry {
             id: "x".into(),
@@ -413,59 +406,4 @@ async fn reports_from_a_clock_slightly_ahead_are_visible_at_once() {
     assert_eq!(post(&app, &report(-5)).await, StatusCode::OK);
     let ex = get(&app, "/api/exceptions?host=x").await;
     assert_eq!(ex["exceptions"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn applications_are_listed_described_and_missed() {
-    let shop = AppConfig {
-        id: "x/shop".parse().unwrap(),
-        name: Some("Shop".into()),
-        env: Some("prod".into()),
-        note: Some("the web shop".into()),
-        probes: vec![AppProbe {
-            url: "https://shop.example.com/".into(),
-            expect: vec![],
-            headers: Headers([("Authorization".to_string(), "Bearer s3cret".to_string())].into()),
-        }],
-    };
-    let (app, _) = app_configured(vec![], vec![shop]);
-    let listed = |mins_ago| Report { containers_listed: true, ..report(mins_ago) };
-    assert_eq!(post(&app, &listed(3)).await, StatusCode::OK);
-    let mut redeployed = listed(2);
-    redeployed.workloads[0].facts.as_mut().unwrap().image =
-        "registry.example.com/captain:1.4.3".into();
-    let deployed_at = redeployed.ts;
-    assert_eq!(post(&app, &redeployed).await, StatusCode::OK);
-
-    let list = get(&app, "/api/apps").await;
-    let apps = list["apps"].as_array().unwrap();
-    let keys: Vec<&str> = apps.iter().map(|a| a["key"].as_str().unwrap()).collect();
-    assert_eq!(keys[0], "x/shop", "missing, so first");
-    assert!(keys.contains(&"x/captain") && keys.contains(&"x/_systemd/xray"), "{keys:?}");
-    let missing = &apps[0];
-    assert_eq!(
-        (&missing["name"], &missing["status"], &missing["incidents"][0]["code"]),
-        (&"Shop".into(), &"critical".into(), &"APP_MISSING".into())
-    );
-    assert_eq!(missing["endpoints"][0]["url"], "https://shop.example.com/");
-    assert!(!list.to_string().contains("s3cret"), "a probe token never leaves the server");
-
-    let overview = get(&app, "/api/overview").await;
-    let host = &overview["customers"][0]["hosts"][0];
-    assert!(host["incidents"].as_array().unwrap().iter().any(|i| i["subject"] == "app:x/shop"));
-
-    let one = get(&app, missing["links"]["app"].as_str().unwrap()).await;
-    assert_eq!(
-        (one["app"]["note"].as_str(), one["workloads"].as_array().map(Vec::len)),
-        (Some("the web shop"), Some(0))
-    );
-    let captain = get(&app, "/api/apps/x/captain").await;
-    let at: Timestamp = captain["app"]["last_deployed"].as_str().unwrap().parse().unwrap();
-    assert_eq!(at.as_second(), deployed_at.as_second(), "its last deployment");
-    assert_eq!(captain["workloads"][0]["key"]["service"], "api");
-    assert_eq!(captain["workloads"][0]["links"]["app"], "/api/apps/x/captain");
-    let lone = get(&app, "/api/apps/x/_systemd/xray").await;
-    assert_eq!(lone["app"]["name"], "xray");
-    let (status, _) = call(&app, "GET", "/api/apps/x/nothing", Some(READER_TOKEN), None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
 }

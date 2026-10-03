@@ -2,7 +2,6 @@
 
 mod api;
 mod app;
-mod apps;
 mod connect;
 mod names;
 mod problems;
