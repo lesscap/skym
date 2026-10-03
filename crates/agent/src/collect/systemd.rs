@@ -5,10 +5,15 @@ use skym_core::model::{RunState, WorkloadFacts, WorkloadKind, WorkloadState};
 use skym_core::subject::WorkloadKey;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub async fn collect(
-    host: &str,
-    units: &[SystemdUnit],
-) -> (Vec<(WorkloadKey, WorkloadFacts, WorkloadState)>, Vec<String>) {
+pub struct Unit {
+    pub key: WorkloadKey,
+    pub facts: WorkloadFacts,
+    pub state: WorkloadState,
+    /// systemd's `NRestarts`: automatic restarts since the unit was loaded.
+    pub restart_count: Option<u32>,
+}
+
+pub async fn collect(host: &str, units: &[SystemdUnit]) -> (Vec<Unit>, Vec<String>) {
     let tables: Vec<String> = ["/proc/net/tcp", "/proc/net/tcp6"]
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
@@ -20,9 +25,14 @@ pub async fn collect(
         errors.push("systemd: cannot read /proc/net/tcp; port checks skipped".to_string());
     }
     for unit in units {
-        match show(&unit.unit).await.and_then(|s| unit_state(&parse_show(&s))) {
-            Ok((run, memory)) => {
-                workloads.push(workload(host, unit, run, memory, listening.as_ref()))
+        let shown = show(&unit.unit).await.and_then(|s| {
+            let props = parse_show(&s);
+            Ok((unit_state(&props)?, restart_count(&props)))
+        });
+        match shown {
+            Ok(((run, memory), restart_count)) => {
+                let (key, facts, state) = workload(host, unit, run, memory, listening.as_ref());
+                workloads.push(Unit { key, facts, state, restart_count });
             }
             Err(e) => errors.push(format!("systemd {}: {e}", unit.unit)),
         }
@@ -69,7 +79,7 @@ fn workload(
 
 /// Bounded: a wedged systemd must not stall the pass. The child is killed on timeout.
 async fn show(unit: &str) -> Result<String, String> {
-    let props = "LoadState,ActiveState,SubState,MemoryCurrent";
+    let props = "LoadState,ActiveState,SubState,MemoryCurrent,NRestarts";
     let run = tokio::process::Command::new("systemctl")
         .args(["show", unit, "-p", props])
         .kill_on_drop(true)
@@ -97,6 +107,10 @@ pub fn unit_state(props: &BTreeMap<&str, &str>) -> Result<(RunState, Option<u64>
         (None, _) => return Err("no ActiveState".into()),
     };
     Ok((run, props.get("MemoryCurrent").and_then(|m| m.parse().ok())))
+}
+
+pub fn restart_count(props: &BTreeMap<&str, &str>) -> Option<u32> {
+    props.get("NRestarts")?.parse().ok()
 }
 
 /// Listening ports across the socket tables that could be read; `None` if none could.
@@ -162,5 +176,12 @@ mod tests {
         assert_eq!(state("ActiveState=deactivating\n"), Ok((RunState::Restarting, None)));
         assert_eq!(state("ActiveState=inactive\n"), Ok((RunState::Inactive, None)));
         assert!(state("LoadState=not-found\nActiveState=inactive\n").is_err());
+    }
+
+    #[test]
+    fn restart_count_is_read_when_known() {
+        assert_eq!(restart_count(&parse_show("NRestarts=4\n")), Some(4));
+        assert_eq!(restart_count(&parse_show("NRestarts=[not set]\n")), None);
+        assert_eq!(restart_count(&parse_show("ActiveState=active\n")), None);
     }
 }

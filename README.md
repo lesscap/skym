@@ -27,9 +27,10 @@ Under development; not released yet. Build from source with `cargo build --relea
 | Part | State |
 | --- | --- |
 | `skym status`, `exceptions`, `report --dry-run`, `schema` | Working: host, Docker, systemd, datastore and container log checks |
+| `skym agent`, `skym doctor` | Working: reports every interval, buffers and replays while the server is away |
 | `skym-server` | Working: report ingest, incidents, heartbeat loss, disk projection, query API |
-| `skym agent` (collect and push on an interval, buffer and replay), `skym doctor` | Next |
-| Endpoint and TLS probes, releases and install, the agent skill, notifications, web UI | Later |
+| Endpoint and TLS probes | Next |
+| Releases and install, the agent skill, notifications, web UI | Later |
 
 ## License
 

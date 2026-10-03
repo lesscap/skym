@@ -8,7 +8,7 @@ every host                                  your own machine
 │ skym                       │   HTTPS POST │ skym-server                  │
 │  skym status / exceptions  │  /api/report │  ingest reports (per-host    │
 │   (CLI for humans/agents)  │ ───────────▶ │   token)                     │
-│  skym agent (planned)      │  every 60s   │  SQLite store                │
+│  skym agent                │  every 60s   │  SQLite store                │
 │   (collect + report)       │              │  heartbeat timeout detection │
 └────────────────────────────┘              │  query API                   │
                                             └──────────────▲───────────────┘
@@ -18,7 +18,7 @@ every host                                  your own machine
 
 | Component | Runs on | Role |
 | --- | --- | --- |
-| `skym` | every monitored host | One binary. As a CLI it answers "how is this host right now" locally. As `skym agent` (planned) it collects on a fixed interval and pushes a report. |
+| `skym` | every monitored host | One binary. As a CLI it answers "how is this host right now" locally. As `skym agent` it collects on a fixed interval and pushes a report. |
 | `skym-server` | a machine you control | Receives reports, stores the latest state, derives events and incidents, detects lost heartbeats, serves the query API. |
 | skill (planned) | the agent's side | A document that tells an AI agent how to call the API and read the results. |
 | UI | served by `skym-server` (later) | A read-only view over the same API. It contains no logic of its own. |
@@ -63,7 +63,7 @@ In Rust: no `deny_unknown_fields`, `#[serde(default)]` on non-`Option` fields ad
 | --- | --- |
 | A host goes down or loses network | Its heartbeat stops; the server opens `HEARTBEAT_LOST`. |
 | `skym` crashes on a host | Same as above. |
-| `skym-server` is down | Hosts keep checking locally and buffer reports; buffered reports are replayed in order when the server is back (planned with `skym agent`). A report no newer than the last one stored only counts as a heartbeat. |
+| `skym-server` is down | Hosts keep checking locally and buffer reports; buffered reports are replayed in order when the server is back. A report no newer than the last one stored only counts as a heartbeat. |
 | `skym-server` restarts | Lost heartbeats are counted from the later of the last report and the server start, so a restart opens none by itself. |
 | All hosts go silent at once | Each host opens its own `HEARTBEAT_LOST`; when at least 80% of the hosts that have reported (and at least 2) are silent, every one's detail starts with "all hosts silent", pointing at the server side or the network. |
 | The server host itself dies | Planned: the server pings an external dead man's switch (healthchecks.io); missing pings alert through that service. |

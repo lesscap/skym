@@ -11,8 +11,8 @@
 | `skym report --dry-run` | Print the exact report that would be sent | no |
 | `skym schema <status\|exceptions\|report>` | Print the JSON Schema of a command's `--json` output | no |
 | `skym --version` | Print the version | no |
-| `skym agent` (planned) | Run in the foreground, collecting and reporting every interval; managed by systemd | yes |
-| `skym doctor` (planned) | Check the installation: configuration, Docker socket access, server reachability, token validity | yes |
+| `skym agent` | Run in the foreground, collecting and reporting every interval; managed by systemd | yes |
+| `skym doctor` | Check the installation: configuration, token file, state directory, collection, server reachability, and one real report without exception groups, so a running agent's counts are not doubled (exit code 1 if any check fails) | yes |
 
 ### `status`
 
@@ -24,7 +24,7 @@ WARN  /data             DISK_FILLING     87% used
 
 With `--json`, the output has the same shape as `GET /api/hosts/{host}` in the [query API](api.md), so an agent reads a host the same way locally and remotely.
 
-Findings that need history only the server has (lost heartbeats, disk growth projection, endpoint and TLS probes) do not appear locally. Crash restarts and container OOM kills come from Docker's event buffer, which keeps only the last 256 events, so locally they are a lower bound; a container that is crash-looping right now still shows as `WORKLOAD_DOWN` (restarting). Host-level OOM kills need a previous reading, so they are left to `skym agent` (planned).
+Findings that need history only the server has (lost heartbeats, disk growth projection, endpoint and TLS probes) do not appear locally. Crash restarts and container OOM kills come from Docker's event buffer, which keeps only the last 256 events, so locally they are a lower bound; a container that is crash-looping right now still shows as `WORKLOAD_DOWN` (restarting). Host-level OOM kills and systemd restarts need a previous reading, so only `skym agent` reports them.
 
 Disk usage follows `df`: blocks reserved for root count neither as used nor as available.
 
@@ -66,7 +66,30 @@ unit = "xray"
 ports = [443]                        # optional: ports that must be listening
 ```
 
-Planned with `skym agent`: `server`, `token_file` (`/etc/skym/token`, mode 0600, kept out of the configuration) and the state directory `/var/lib/skym/` (undelivered reports, log cursors). Public IP addresses are never reported.
+`skym agent` and `skym doctor` also need:
+
+```toml
+server = "https://skym.example.com"
+token_file = "/etc/skym/token"       # mode 0600, kept out of the configuration
+state_dir = "/var/lib/skym"          # undelivered reports and log cursors
+```
+
+`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` are honored. Public IP addresses are never reported.
+
+### `agent`
+
+Each interval (the first one at start; a pass that overruns skips the missed ones):
+
+1. Collect. Container events are read from where the last successful query ended, reaching 15 s further back for context (a `die` right after a `kill` is a requested stop). Crash restarts are remembered for an hour, so the count does not depend on Docker's 256-event buffer.
+2. Store the report in `state_dir/outbox`, then move the log cursors on: a crash in between reads the same lines again rather than losing them. If the report cannot be stored (a full disk), it is sent right away instead, so the host does not go silent.
+3. Send stored reports oldest first. A 2xx or a rejection (400, 413, 422: it will never be accepted) removes the report; anything else keeps it and waits for the next pass. A stored report that cannot be read is dropped. Reports older than 24 hours, and beyond 1440 stored, are dropped.
+
+Lower bounds and limits:
+
+- Host OOM kills: the kernel's `oom_kill` counter, minus the container OOM kills seen in the same pass, gives at most one host-level OOM event per pass.
+- systemd restarts are counted from `NRestarts` between passes; restarts before `skym` started are unknown.
+- Logs are read from each workload's cursor (a workload that never logged: from the previous pass), but never more than an hour back: lines written while `skym` was down for longer are not counted. A line still missing its newline is left for the next pass.
+- What `skym` remembers between passes (restarts, counters) is lost when it restarts; the next pass starts from Docker's event buffer again.
 
 The host configuration holds no host name and no customer: the server derives both from the token. Endpoints and certificates are probed by the server and configured there.
 
@@ -87,7 +110,7 @@ Every check is read-only.
 | --- | --- | --- |
 | Containers | Docker API: list, inspect, events, logs | `docker` group |
 | Memory | cgroup files | nothing |
-| OOM kills | Docker `oom` events and `State.OOMKilled` from inspect for containers; for the host, the `oom_kill` counter in `/proc/vmstat` (planned, needs `skym agent`) | `docker` group |
+| OOM kills | Docker `oom` events and `State.OOMKilled` from inspect for containers; for the host, the `oom_kill` counter in `/proc/vmstat` | `docker` group |
 | Datastores | A protocol handshake from the host to the container's address (Postgres SSLRequest, Redis `PING`, MySQL greeting), no credentials. Postgres replication lag is queried with credentials read locally from inspect | `docker` group |
 | systemd units | Unit state; listening sockets from `/proc/net/tcp*` | nothing |
 
@@ -95,9 +118,9 @@ Every check is read-only.
 
 Every Docker call has a deadline. Reading logs tries `tail` first and falls back to `since` alone: some Docker versions (seen on 24.0) never return a `tail` read of certain json-file logs, while `since` alone scans large logs from the start.
 
-## Running (planned)
+## Running
 
-`skym agent` will run as a dedicated `skym` user under systemd:
+`skym agent` runs as a dedicated `skym` user under systemd (a packaged unit file comes with releases):
 
 ```ini
 [Service]

@@ -91,6 +91,11 @@ fn mount_state(path: &str, v: &Vfs) -> MountState {
     }
 }
 
+/// The kernel's count of OOM kills since boot, from `/proc/vmstat`.
+pub fn oom_kills(vmstat: &str) -> Option<u64> {
+    vmstat.lines().find_map(|l| l.strip_prefix("oom_kill ")?.trim().parse().ok())
+}
+
 pub fn parse_loadavg(s: &str) -> Option<(f64, f64, f64)> {
     let mut it = s.split_whitespace().map(str::parse::<f64>);
     Some((it.next()?.ok()?, it.next()?.ok()?, it.next()?.ok()?))
@@ -161,6 +166,12 @@ mod tests {
     fn fixture(name: &str) -> String {
         let path = format!("{}/tests/fixtures/proc/{name}", env!("CARGO_MANIFEST_DIR"));
         std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn oom_kill_counter_from_vmstat() {
+        assert_eq!(oom_kills("pgfault 12\noom_kill 3\nnr_free 9\n"), Some(3));
+        assert_eq!(oom_kills("pgfault 12\n"), None, "kernels before 4.13 have no counter");
     }
 
     #[test]

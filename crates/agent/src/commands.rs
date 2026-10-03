@@ -12,15 +12,19 @@ use skym_core::time::parse_since;
 use skym_core::view::{HostView, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One collection pass; collection errors go to stderr.
-async fn pass(
+/// One collection pass: events from the last hour, logs after `logs_after`.
+/// Collection errors go to stderr.
+pub async fn pass(
     cfg: &Config,
     now: Timestamp,
-    logs_since: Timestamp,
+    logs_after: Timestamp,
     detail: Detail,
 ) -> (String, Collected) {
     let host = host::hostname();
-    let collected = collect(cfg, &host, &Window { now, logs_since, detail }).await;
+    let events_since = now - SignedDuration::from_hours(1);
+    let cursors = BTreeMap::new();
+    let window = Window { now, events_since, logs_after, cursors: &cursors, detail };
+    let collected = collect(cfg, &host, &window).await;
     for e in &collected.errors {
         eprintln!("error: {e}");
     }

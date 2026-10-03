@@ -9,6 +9,7 @@ use futures_util::{StreamExt, stream};
 use jiff::Timestamp;
 use skym_core::model::ExceptionGroup;
 use skym_core::subject::WorkloadKey;
+use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -17,31 +18,44 @@ use tokio::time::timeout;
 const ATTEMPTS: [&str; 2] = ["20000", "all"];
 const DEADLINE: Duration = Duration::from_secs(3);
 
+/// One workload's groups, and the time of its last line read.
+type OneRead = (Vec<ExceptionGroup>, Option<(WorkloadKey, Timestamp)>);
+
+/// What one pass read from the logs.
+#[derive(Default)]
+pub struct Read {
+    pub groups: Vec<ExceptionGroup>,
+    /// The time of the last line read, per workload that had any.
+    pub ends: BTreeMap<WorkloadKey, Timestamp>,
+    pub errors: Vec<String>,
+}
+
+/// Each target's lines strictly after its own time.
 pub async fn read(
     docker: &Docker,
-    targets: &[(WorkloadKey, String)],
-    since: Timestamp,
+    targets: &[(WorkloadKey, String, Timestamp)],
     detail: Detail,
-) -> (Vec<ExceptionGroup>, Vec<String>) {
-    let results: Vec<Result<Vec<ExceptionGroup>, String>> = stream::iter(targets)
-        .map(|(key, id)| read_one(docker, key, id, since, detail))
+) -> Read {
+    let results: Vec<Result<OneRead, String>> = stream::iter(targets)
+        .map(|(key, id, after)| read_one(docker, key, id, *after, detail))
         .buffer_unordered(8)
         .collect()
         .await;
-    let (groups, errors) = split(results);
-    (groups.concat(), errors)
+    let (read, errors) = split(results);
+    let (groups, ends): (Vec<_>, Vec<_>) = read.into_iter().unzip();
+    Read { groups: groups.concat(), ends: ends.into_iter().flatten().collect(), errors }
 }
 
 async fn read_one(
     docker: &Docker,
     key: &WorkloadKey,
     id: &str,
-    since: Timestamp,
+    after: Timestamp,
     detail: Detail,
-) -> Result<Vec<ExceptionGroup>, String> {
+) -> Result<OneRead, String> {
     let label = format!("logs {}/{}", key.project, key.service);
     for tail in ATTEMPTS {
-        if let Ok(result) = timeout(DEADLINE, read_tail(docker, key, id, since, detail, tail)).await
+        if let Ok(result) = timeout(DEADLINE, read_tail(docker, key, id, after, detail, tail)).await
         {
             return result.map_err(|e| format!("{label}: {e}"));
         }
@@ -53,15 +67,18 @@ async fn read_tail(
     docker: &Docker,
     key: &WorkloadKey,
     id: &str,
-    since: Timestamp,
+    after: Timestamp,
     detail: Detail,
     tail: &str,
-) -> Result<Vec<ExceptionGroup>, bollard::errors::Error> {
-    let mut frames = docker.logs(id, Some(options(since, tail)));
+) -> Result<OneRead, bollard::errors::Error> {
+    let mut frames = docker.logs(id, Some(options(after, tail)));
     let mut grouper = Grouper::new(key.clone(), detail);
     let (mut out, mut err) = (LineAssembler::default(), LineAssembler::default());
+    let mut last: Option<Timestamp> = None;
+    // Docker's `since` has whole seconds: lines are kept by their own time instead.
     let mut feed = |stream, lines: Vec<(Timestamp, String)>| {
-        for (ts, text) in lines.iter().filter(|(ts, _)| *ts >= since) {
+        for (ts, text) in lines.iter().filter(|(ts, _)| *ts > after) {
+            last = last.max(Some(*ts));
             grouper.push(LogLine { ts: *ts, stream, text });
         }
     };
@@ -76,9 +93,8 @@ async fn read_tail(
             LogOutput::StdIn { .. } => {}
         }
     }
-    feed(Stream::Stdout, out.finish());
-    feed(Stream::Stderr, err.finish());
-    Ok(grouper.finish())
+    // A line without its newline yet is still being written: it is read whole next time.
+    Ok((grouper.finish(), last.map(|t| (key.clone(), t))))
 }
 
 /// Both streams, each line prefixed with its timestamp (needed to reassemble lines).
@@ -125,11 +141,6 @@ impl LineAssembler {
             })
             .collect()
     }
-
-    /// A trailing line without a newline.
-    pub fn finish(self) -> Vec<(Timestamp, String)> {
-        self.pending.into_iter().collect()
-    }
 }
 
 /// `"2026-10-01T12:00:00.123456789Z message"` → timestamp and message.
@@ -174,6 +185,5 @@ mod tests {
         // a TTY entry holding several lines, then a trailing half line
         let tty = a.push(&format!("{} one\ntwo\nthr", t(6)));
         assert_eq!(tty.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>(), ["one", "two"]);
-        assert_eq!(a.finish()[0].1, "thr");
     }
 }

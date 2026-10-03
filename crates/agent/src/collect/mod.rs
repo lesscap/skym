@@ -16,7 +16,7 @@ use bollard::models::ContainerInspectResponse;
 use containers::{facts_of, state_of, timestamp, winners};
 use events::{container_event, crash_restarts, ooms};
 use futures_util::future::join_all;
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use skym_core::model::{
     DatastoreKind, ExceptionGroup, HostFacts, HostState, LocalEvent, RunState, TransientCounts,
     WorkloadFacts, WorkloadState,
@@ -35,9 +35,13 @@ fn split<T, E>(results: impl IntoIterator<Item = Result<T, E>>) -> (Vec<T>, Vec<
     })
 }
 
-pub struct Window {
+pub struct Window<'a> {
     pub now: Timestamp,
-    pub logs_since: Timestamp,
+    /// Container events and OOM exits from here on.
+    pub events_since: Timestamp,
+    /// Log lines strictly after the workload's cursor, or after this without one.
+    pub logs_after: Timestamp,
+    pub cursors: &'a BTreeMap<WorkloadKey, Timestamp>,
     pub detail: Detail,
 }
 
@@ -47,6 +51,7 @@ pub struct Workload {
     pub state: WorkloadState,
 }
 
+#[derive(Default)]
 pub struct Collected {
     pub host: Option<(HostFacts, HostState)>,
     pub workloads: Vec<Workload>,
@@ -57,9 +62,19 @@ pub struct Collected {
     pub errors: Vec<String>,
     /// Every enabled source failed: nothing here is worth judging.
     pub all_failed: bool,
+    /// The time of the last log line read, per workload that had any.
+    pub log_ends: BTreeMap<WorkloadKey, Timestamp>,
+    /// The kernel's `oom_kill` counter (`/proc/vmstat`), when readable.
+    pub oom_kill_count: Option<u64>,
+    /// systemd's `NRestarts` per unit.
+    pub unit_restart_counts: BTreeMap<WorkloadKey, u32>,
+    /// Docker's events were read up to `Window::now`.
+    pub events_read: bool,
+    /// Every container was listed and inspected: a workload missing here is gone.
+    pub workloads_complete: bool,
 }
 
-pub async fn collect(cfg: &Config, host: &str, w: &Window) -> Collected {
+pub async fn collect(cfg: &Config, host: &str, w: &Window<'_>) -> Collected {
     let mut errors = Vec::new();
     let docker = match cfg.docker.enabled {
         true => note(&mut errors, "docker", connect(cfg).await),
@@ -76,6 +91,8 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window) -> Collected {
         Some((d, _)) => note(&mut errors, "docker", from_docker(d, cfg, host, w).await),
         None => None,
     };
+    let oom_kill_count =
+        std::fs::read_to_string("/proc/vmstat").ok().and_then(|s| host::oom_kills(&s));
     let (units, unit_errors) = systemd::collect(host, &cfg.systemd).await;
     let outcomes = [
         Some(host_info.is_some()),
@@ -84,7 +101,9 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window) -> Collected {
     ];
     let out = from_docker.unwrap_or_default();
     errors.extend(out.errors.into_iter().chain(unit_errors));
-    let units = units.into_iter().map(|(key, facts, state)| Workload { key, facts, state });
+    let unit_restart_counts =
+        units.iter().filter_map(|u| Some((u.key.clone(), u.restart_count?))).collect();
+    let units = units.into_iter().map(|u| Workload { key: u.key, facts: u.facts, state: u.state });
     Collected {
         host: host_info,
         workloads: out.workloads.into_iter().chain(units).collect(),
@@ -93,6 +112,11 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window) -> Collected {
         exceptions: out.exceptions,
         errors,
         all_failed: outcomes.iter().flatten().all(|ok| !ok),
+        log_ends: out.log_ends,
+        oom_kill_count,
+        unit_restart_counts,
+        events_read: out.events_read,
+        workloads_complete: !cfg.docker.enabled || out.complete,
     }
 }
 
@@ -114,21 +138,25 @@ struct DockerOutput {
     ooms: Vec<LocalEvent>,
     exceptions: Vec<ExceptionGroup>,
     errors: Vec<String>,
+    log_ends: BTreeMap<WorkloadKey, Timestamp>,
+    events_read: bool,
+    complete: bool,
 }
 
 async fn from_docker(
     d: &Docker,
     cfg: &Config,
     host: &str,
-    w: &Window,
+    w: &Window<'_>,
 ) -> anyhow::Result<DockerOutput> {
     let (inspects, mut errors) = docker::inspect_all(d, &cfg.docker.exclude).await?;
-    let hour_ago = w.now - SignedDuration::from_hours(1);
-    let events: Vec<_> = match docker::events(d, hour_ago, w.now).await {
-        Ok(messages) => messages.iter().filter_map(|m| container_event(host, m)).collect(),
+    let complete = errors.is_empty();
+    let (events, events_read): (Vec<_>, bool) = match docker::events(d, w.events_since, w.now).await
+    {
+        Ok(messages) => (messages.iter().filter_map(|m| container_event(host, m)).collect(), true),
         Err(e) => {
             errors.push(format!("{e:#}"));
-            Vec::new()
+            (Vec::new(), false)
         }
     };
     let mut restarts = crash_restarts(&events);
@@ -138,19 +166,25 @@ async fn from_docker(
     let workloads: Vec<_> =
         chosen.into_iter().map(|(key, i)| (workload(key, i, &mut restarts), i)).collect();
     let probed = join_all(workloads.into_iter().map(probe)).await;
-    let targets: Vec<(WorkloadKey, String)> = probed
+    let targets: Vec<(WorkloadKey, String, Timestamp)> = probed
         .iter()
         .filter(|(wl, _)| wl.state.run != RunState::Created)
-        .map(|(wl, id)| (wl.key.clone(), id.clone()))
+        .map(|(wl, id)| {
+            let after = w.cursors.get(&wl.key).copied().unwrap_or(w.logs_after);
+            (wl.key.clone(), id.clone(), after)
+        })
         .collect();
-    let (exceptions, log_errors) = logs::read(d, &targets, w.logs_since, w.detail).await;
-    errors.extend(log_errors);
+    let read = logs::read(d, &targets, w.detail).await;
+    errors.extend(read.errors);
     Ok(DockerOutput {
         workloads: probed.into_iter().map(|(wl, _)| wl).collect(),
         transient,
-        ooms: ooms(&events, &oom_exits, hour_ago),
-        exceptions,
+        ooms: ooms(&events, &oom_exits, w.events_since),
+        exceptions: read.groups,
         errors,
+        log_ends: read.ends,
+        events_read,
+        complete,
     })
 }
 

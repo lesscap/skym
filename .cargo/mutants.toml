@@ -22,4 +22,8 @@ exclude_globs = [
     "crates/agent/src/commands.rs",
     "crates/agent/src/collect/mod.rs",
     "crates/agent/src/collect/docker.rs",
+    # The agent loop, HTTP delivery and doctor's checks: verified end to end against a server.
+    "crates/agent/src/agent.rs",
+    "crates/agent/src/deliver.rs",
+    "crates/agent/src/doctor.rs",
 ]

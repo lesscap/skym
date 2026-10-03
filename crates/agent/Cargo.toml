@@ -24,9 +24,12 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio = { version = "1", features = ["rt", "macros", "net", "time", "process", "io-util"] }
+tokio = { version = "1", features = ["rt", "macros", "net", "time", "process", "io-util", "signal"] }
 tokio-postgres = "0.7"
 toml = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+flate2 = "1"
 
 [dev-dependencies]
 skym-core = { path = "../core", features = ["fixtures"] }

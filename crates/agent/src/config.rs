@@ -10,6 +10,12 @@ pub const DEFAULT_PATH: &str = "/etc/skym/config.toml";
 #[derive(Deserialize, Debug)]
 #[serde(default)]
 pub struct Config {
+    /// Base URL of `skym-server`; only `skym agent` and `skym doctor` need it.
+    pub server: Option<String>,
+    /// The host token, kept out of this file (mode 0600).
+    pub token_file: PathBuf,
+    /// Undelivered reports and log cursors.
+    pub state_dir: PathBuf,
     pub interval: SignedDuration,
     pub docker: DockerConfig,
     pub systemd: Vec<SystemdUnit>,
@@ -18,6 +24,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            server: None,
+            token_file: "/etc/skym/token".into(),
+            state_dir: "/var/lib/skym".into(),
             interval: SignedDuration::from_secs(60),
             docker: DockerConfig::default(),
             systemd: Vec::new(),
@@ -65,6 +74,7 @@ fn parse(text: &str) -> anyhow::Result<Config> {
     if let Some(dup) = cfg.systemd.iter().find(|u| !seen.insert(&u.unit)) {
         anyhow::bail!("[[systemd]] unit {:?} is declared twice", dup.unit);
     }
+    anyhow::ensure!(cfg.interval.is_positive(), "interval must be positive");
     Ok(cfg)
 }
 
@@ -92,6 +102,8 @@ mod tests {
             "#,
         )
         .unwrap();
+        assert_eq!(cfg.server.as_deref(), Some("https://skym.example.com"));
+        assert_eq!(cfg.state_dir, Path::new("/var/lib/skym"));
         assert_eq!(cfg.interval, SignedDuration::from_secs(30));
         assert!(cfg.docker.enabled);
         assert_eq!(cfg.docker.exclude, ["noisy"]);
@@ -107,5 +119,6 @@ mod tests {
         assert_eq!(parse("").unwrap().interval, SignedDuration::from_secs(60));
         let twice = "[[systemd]]\nunit = \"xray\"\n[[systemd]]\nunit = \"xray\"\n";
         assert!(parse(twice).unwrap_err().to_string().contains("declared twice"));
+        assert!(parse("interval = \"0s\"").is_err());
     }
 }

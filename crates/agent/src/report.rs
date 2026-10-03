@@ -59,6 +59,7 @@ mod tests {
             exceptions: r.exceptions.clone(),
             errors: vec![],
             all_failed: false,
+            ..Default::default()
         }
     }
 

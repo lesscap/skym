@@ -1,9 +1,16 @@
 //! `skym`: checks this host and the containers on it.
 
+mod agent;
 mod collect;
 mod commands;
 mod config;
+mod cursors;
+mod deliver;
+mod doctor;
 mod exceptions;
+mod facts;
+mod memory;
+mod outbox;
 mod report;
 mod status;
 
@@ -49,6 +56,10 @@ enum Command {
         #[arg(long, required = true)]
         dry_run: bool,
     },
+    /// Collect and report every interval (run by systemd)
+    Agent,
+    /// Check this installation, ending with one real report to the server
+    Doctor,
     /// JSON Schema of a command's --json output
     Schema {
         #[arg(value_enum)]
@@ -59,6 +70,10 @@ enum Command {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    // The only TLS provider in the build; installing it cannot conflict.
+    if rustls::crypto::ring::default_provider().install_default().is_err() {
+        eprintln!("warning: a TLS provider was already installed");
+    }
     let result = match config::load(cli.config.as_deref()) {
         Err(e) => Err(e),
         Ok(cfg) => match cli.command {
@@ -68,6 +83,8 @@ async fn main() -> ExitCode {
             }
             Command::Report { .. } => commands::report_dry_run(&cfg).await,
             Command::Schema { which } => commands::schema(which),
+            Command::Agent => agent::run(&cfg).await,
+            Command::Doctor => doctor::run(&cfg).await,
         },
     };
     match result {

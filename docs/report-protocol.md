@@ -1,6 +1,6 @@
 # Report protocol
 
-`skym agent` (planned) sends one message type, `Report`, on a fixed interval. Each report is also the host's heartbeat.
+`skym agent` sends one message type, `Report`, on a fixed interval. Each report is also the host's heartbeat.
 
 ## Transport
 
@@ -53,7 +53,7 @@ A facts hash is the first 8 bytes of SHA-256 over the facts' JSON form, written 
 
 ## When facts are sent
 
-Planned with `skym agent`; until then every report carries all facts. Facts change rarely, so most reports will carry only the hash and the state.
+Facts change rarely, so most reports carry only the hash and the state. (`skym report --dry-run` shows every fact.)
 
 ```text
 send facts for entity e ⇔ hash(e.facts) ≠ hash last sent for e
@@ -75,11 +75,11 @@ send facts for entity e ⇔ hash(e.facts) ≠ hash last sent for e
 
 Events derived from facts (`Deployed`, `ConfigChanged`, `HostRebooted`, `KernelChanged`) are produced by the server by comparing the incoming facts with the stored ones ([rules](domain-model.md)). Full reports are not kept.
 
-## Buffering and replay (planned)
+## Buffering and replay
 
-When a report cannot be delivered, `skym` keeps it in a local buffer (bounded by count and age, 24 hours by default) and sends buffered reports in order once the server is reachable. A report the server already has is only a heartbeat (see [transport](#transport)), so replaying a report twice is harmless.
+Every report is stored on the host before it is sent (at most 1440 reports and 24 hours) and sent oldest first once the server is reachable. A report the server already has is only a heartbeat (see [transport](#transport)), so replaying a report twice is harmless. A report the server rejects as invalid (400, 413, 422) is dropped; after any other failure it is kept and retried with the next pass.
 
-Log reading keeps a per-workload cursor on the host, so a restart of `skym` neither repeats nor skips log lines.
+Log reading keeps a per-workload cursor on the host (the time of the last line read), so a restart of `skym` neither repeats nor skips log lines, within the last hour. See [`skym agent`](cli.md#agent).
 
 ## Compatibility
 
