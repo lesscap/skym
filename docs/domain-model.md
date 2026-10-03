@@ -4,7 +4,7 @@ The model is derived from the questions a reader — an AI agent or a person —
 
 | Question | Answered by |
 | --- | --- |
-| Where is something wrong right now? | Open incidents rolled up by customer and host |
+| Where is something wrong right now? | Open incidents, each with its application (or its host) |
 | What is going on with this host? | Host facts and state, its workloads, its open incidents |
 | What is going on with this application? | Workload state, exception groups, recent deployments |
 | When did it start, and what else happened? | Incidents and events on a timeline |
@@ -22,11 +22,8 @@ Events never alert by themselves; they explain incidents. Incidents are what a r
 ## Entities
 
 ```rust
-struct Customer { id: CustomerId, name: String }
-
 struct Host {
     id: HostId,
-    customer: CustomerId,
     facts: HostFacts,
     state: HostState,
     last_seen: Timestamp,
@@ -44,10 +41,9 @@ struct WorkloadKey {
     service: String,             // compose service, container name, or systemd unit
 }
 
-struct Endpoint {                // configured on the server, probed from it
+struct Endpoint {                // one of an application's URLs, probed from the server
     url: Url,
-    customer: CustomerId,        // an application's probe: its host's customer
-    app: Option<AppKey>,
+    app: AppKey,
 }
 
 struct App {                     // discovered from workloads; described in the configuration
@@ -56,20 +52,22 @@ struct App {                     // discovered from workloads; described in the 
 }
 
 struct AppKey {
-    host: HostId,
+    host: HostId,                // or "external": runs where skym does not watch, only probed
     project: String,             // the compose project, or "-" / "_systemd"
     service: Option<String>,     // set only for "-" and "_systemd": each such workload is its own app
 }
 ```
 
 ```text
-Customer 1─* Host 1─* Workload 1─* ExceptionGroup
-Customer 1─* Endpoint
+Host 1─* Workload 1─* ExceptionGroup
 Host 1─* App 1─* Workload        app(w) = (w.host, w.project, w.service if w.project ∈ {"-", "_systemd"})
-App 1─* Endpoint
+App 1─* Endpoint                 (an external app has endpoints only)
 Incident.subject ∈ Host ∪ Workload ∪ Mount ∪ Endpoint ∪ App
 Event.subject    ∈ Host ∪ Workload
+Incident.app     = app(w) for a workload, the endpoint's app, the app itself; none for a host or mount
 ```
+
+There are no customers or other fixed groupings: hosts and applications will carry tags for filtering.
 
 ### Subjects
 

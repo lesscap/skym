@@ -321,3 +321,29 @@ fn workloads_belong_to_their_project_or_stand_alone() {
     assert_eq!(app("y/nile").path(), "/api/apps/y/nile");
     assert!(!app("i/-/hbbs").is_unit() && !app("y/nile").is_unit());
 }
+
+#[test]
+fn an_overview_from_an_older_server_parses() {
+    let json = r#"{
+        "ts": "2026-10-01T00:00:00Z", "status": "warn",
+        "customers": [{ "id": "acme", "name": "Acme", "status": "warn", "hosts": [{
+            "id": "x", "status": "warn", "last_report_ago": "5s",
+            "incidents": [{ "subject": "host:x", "code": "OOM_KILLED", "severity": "warn",
+                "detail": "d", "opened_at": null, "open_for": null, "resolved_at": null,
+                "mute_reason": null }] }] }]
+    }"#;
+    let o: skym_core::view::Overview = serde_json::from_str(json).unwrap();
+    assert!(o.problems.is_empty() && o.hosts.is_empty(), "added later, absent before");
+    let host = &o.customers[0].hosts[0];
+    assert_eq!((host.load_1m, host.disks.len(), host.apps), (None, 0, 0));
+    let incident = &host.incidents[0];
+    assert_eq!((incident.app.clone(), incident.observed_since), (None, None));
+}
+
+#[test]
+fn external_apps_run_on_no_host() {
+    let partner: AppKey = "external/partner".parse().unwrap();
+    assert!(partner.is_external() && !partner.is_unit());
+    assert_eq!((partner.host.as_str(), partner.label()), (skym_core::subject::EXTERNAL, "partner"));
+    assert!(!"x/partner".parse::<AppKey>().unwrap().is_external());
+}

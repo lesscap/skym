@@ -1,6 +1,7 @@
 //! One host: what it is, how it is doing, its problems and its services.
 
-use super::{Theme, ago, block, local, problem_table};
+use super::apps::host_apps;
+use super::{Theme, ago, local, problem_table};
 use crate::app::App;
 use crate::names::short;
 use jiff::Timestamp;
@@ -8,18 +9,25 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
-use skym_core::model::RunState;
-use skym_core::view::{HostView, Status};
+use ratatui::widgets::Paragraph;
+use skym_core::rules::IncidentCode;
+use skym_core::subject::Subject;
+use skym_core::view::{HostView, IncidentView};
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
     let Some(h) = &app.host.value else {
         return f.render_widget(Paragraph::new(" loading…"), area);
     };
     let head = header(h, now, theme);
-    let (problems, height) =
-        problem_table(app, &h.incidents, h.observed_since, now, |i| short(&i.subject), theme);
-    let [head_area, problems_area, services] = Layout::vertical([
+    // The host's own problems: its applications' are on them.
+    let own: Vec<IncidentView> = h
+        .incidents
+        .iter()
+        .filter(|i| matches!(i.subject, Subject::Host(_) | Subject::Mount { .. }))
+        .cloned()
+        .collect();
+    let (problems, height) = problem_table(app, &own, now, |i| short(&i.subject), theme);
+    let [head_area, problems_area, apps] = Layout::vertical([
         Constraint::Length(head.len() as u16),
         Constraint::Length(height.min((area.height / 3).max(3))),
         Constraint::Min(3),
@@ -27,7 +35,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
     .areas(area);
     f.render_widget(Paragraph::new(head), head_area);
     f.render_widget(problems, problems_area);
-    service_table(f, services, app, now, theme);
+    host_apps(f, apps, app, now, theme);
 }
 
 fn header(h: &HostView, now: Timestamp, theme: Theme) -> Vec<Line<'static>> {
@@ -65,8 +73,14 @@ fn header(h: &HostView, now: Timestamp, theme: Theme) -> Vec<Line<'static>> {
         ))];
         for m in &state.mounts {
             let used = (m.used_bytes * 100).checked_div(m.total_bytes).unwrap_or(0);
-            let style = if used >= 85 { theme.fg(Color::Yellow) } else { Style::new() };
-            spans.push(Span::styled(format!("  {} {used}%", m.path), style));
+            let filling = h.incidents.iter().any(|i| {
+                !i.muted
+                    && i.code == IncidentCode::DiskFilling
+                    && matches!(&i.subject, Subject::Mount { path, .. } if *path == m.path)
+            });
+            let style = if used >= 85 || filling { theme.fg(Color::Yellow) } else { Style::new() };
+            let mark = if filling { " ▲" } else { "" };
+            spans.push(Span::styled(format!("  {} {used}%{mark}", m.path), style));
         }
         lines.push(Line::from(spans));
     }
@@ -77,51 +91,4 @@ fn header(h: &HostView, now: Timestamp, theme: Theme) -> Vec<Line<'static>> {
         ));
     }
     lines
-}
-
-pub(super) fn service_table(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
-    let services = app.services();
-    let rows: Vec<Row> = services
-        .iter()
-        .map(|w| {
-            let run = match (w.run, w.exit_code) {
-                (RunState::Exited, Some(code)) => format!("exited ({code})"),
-                (run, _) => run.to_string(),
-            };
-            let finished_job = w.run == RunState::Exited && w.exit_code == Some(0);
-            let since = w.state_since.map_or(String::new(), |t| ago(now, t));
-            let datastore = if w.kind == Some(skym_core::model::WorkloadKind::Datastore) {
-                "datastore"
-            } else {
-                ""
-            };
-            Row::new([
-                Cell::from(Line::from(vec![Span::raw(" "), theme.status(w.status)])),
-                Cell::from(format!("{}/{}", w.key.project, w.key.service)),
-                Cell::from(run),
-                Cell::from(Line::from(since).right_aligned()),
-                Cell::from(w.image.clone().unwrap_or_default()),
-                Cell::from(Span::styled(datastore, theme.dim())),
-            ])
-            .style(if finished_job && w.status == Status::Ok {
-                theme.dim()
-            } else {
-                Style::new()
-            })
-        })
-        .collect();
-    let widths = [
-        Constraint::Length(3),
-        Constraint::Percentage(30),
-        Constraint::Length(12),
-        Constraint::Length(8),
-        Constraint::Fill(1),
-        Constraint::Length(9),
-    ];
-    let title = format!(" Services ({}) · problems first ", services.len());
-    let mut state = TableState::default().with_selected(Some(app.frame().cursor));
-    let table = Table::new(rows, widths)
-        .block(block(title, theme))
-        .row_highlight_style(theme.selected(true));
-    f.render_stateful_widget(table, area, &mut state);
 }

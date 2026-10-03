@@ -2,14 +2,9 @@ listen = "0.0.0.0:7280"          # behind a reverse proxy that terminates TLS
 database = "/data/skym.db"
 report_interval = "60s"
 
-[[customers]]
-id = "acme"
-name = "Acme"
-
 # `skym-server token` prints a new token and the hash to put here.
 [[hosts]]
 id = "web-1"
-customer = "acme"
 token_sha256 = "<64 hex characters>"
 
 [[readers]]
@@ -17,29 +12,28 @@ name = "ops-agent"
 token_sha256 = "<64 hex characters>"
 
 # Applications you care about: described, probed, and reported missing when they disappear.
+# Every URL skym probes belongs to one. Header values are secrets: keep this file private (0600).
 [[apps]]
 id = "web-1/shop"               # <host>/<project>, <host>/-/<container> or <host>/_systemd/<unit>
 name = "Shop"
-env = "prod"
+env = "prod"                    # any text; prod, pre and test sort first
 note = "The web shop"
 
+# By default any status below 400 is up.
 [[apps.probes]]
 url = "https://shop.example.com/healthz"
-# headers = { Authorization = "Bearer <probe token>" }
+headers = { Authorization = "Bearer <probe token>" }
 
-# URLs that belong to no application, probed once per report interval. By default any status below 400 is up.
-[[endpoints]]
-url = "https://shop.example.com/"
-customer = "acme"
-
-# A URL that answers 401 without a token is up when it does.
-[[endpoints]]
+# A page that answers 401 without a token is up when it does.
+[[apps.probes]]
 url = "https://admin.example.com/"
-customer = "acme"
 expect = [401]
 
-# A probe URL that wants a token. Header values are secrets: keep this file private (0600).
-[[endpoints]]
-url = "https://api.example.com/healthz"
-customer = "acme"
-headers = { Authorization = "Bearer <probe token>" }
+# A service that runs somewhere skym does not watch: only its URLs are probed.
+[[apps]]
+id = "external/payments"
+name = "Payment provider"
+note = "Third-party checkout; status page at status.example.com"
+
+[[apps.probes]]
+url = "https://api.payments.example.com/health"

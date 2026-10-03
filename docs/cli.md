@@ -91,7 +91,7 @@ Lower bounds and limits:
 - Logs are read from each workload's cursor (a workload that never logged: from the previous pass), but never more than an hour back: lines written while `skym` was down for longer are not counted. A line still missing its newline is left for the next pass.
 - What `skym` remembers between passes (restarts, counters) is lost when it restarts; the next pass starts from Docker's event buffer again.
 
-The host configuration holds no host name and no customer: the server derives both from the token. Endpoints and certificates are probed by the server and configured there.
+The host configuration holds no host name: the server derives it from the token. Applications' URLs and certificates are probed by the server and configured there.
 
 ## Workload sources
 

@@ -167,9 +167,9 @@ fn a_stopped_workload_says_when_it_stopped() {
         r.workloads[0].state.state_since = Some(stopped_at);
         send(&mut c, &r, t0() + mins(m)).unwrap();
     }
-    let open = incidents::listed(&c, true, Some("x"), None, Timestamp::UNIX_EPOCH, 10).unwrap();
-    let since = hosts::stopped_since(&c, &open).unwrap();
-    assert_eq!(since.into_values().collect::<Vec<_>>(), [stopped_at]);
+    let stored = hosts::all_workloads(&c).unwrap();
+    let since: Vec<_> = stored.iter().filter_map(|w| w.state.stopped_since()).collect();
+    assert_eq!(since, [stopped_at]);
 }
 
 #[test]
@@ -408,4 +408,15 @@ fn a_configured_app_with_nothing_running_goes_missing_and_comes_back() {
         missing(&c).is_empty(),
         "an app taken out of the configuration is retired, seen or not"
     );
+}
+
+#[test]
+fn an_external_app_is_never_missing() {
+    let mut c = db::open_in_memory().unwrap();
+    let apps = [app("external/partner", Some("prod"))];
+    let at = |m| t0() + mins(m);
+    for m in [0, 1, 2] {
+        send_with(&mut c, &apps, &listed(report(at(m))), at(m)).unwrap();
+    }
+    assert!(missing(&c).is_empty(), "it runs on no host skym watches");
 }

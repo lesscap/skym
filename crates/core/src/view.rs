@@ -77,6 +77,13 @@ pub struct IncidentView {
     pub mute_reason: Option<String>,
     #[serde(default)]
     pub links: BTreeMap<String, String>,
+    /// The application it belongs to; `None` for a host's own problems (heartbeat, disks…).
+    #[serde(default)]
+    pub app: Option<AppKey>,
+    /// Since when skym watches its subject (the host, or the probed URL): a problem opened
+    /// about then may be older.
+    #[serde(default)]
+    pub observed_since: Option<Timestamp>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -115,6 +122,9 @@ pub struct HostView {
     /// Sources that failed in the last pass.
     #[serde(default)]
     pub errors: Vec<String>,
+    /// The applications on the host.
+    #[serde(default)]
+    pub apps: Vec<AppSummary>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -131,6 +141,28 @@ pub struct HostOverview {
     pub incidents: Vec<IncidentView>,
     #[serde(default)]
     pub links: BTreeMap<String, String>,
+    #[serde(default)]
+    pub load_1m: Option<f64>,
+    #[serde(default)]
+    pub memory_used_bytes: Option<u64>,
+    #[serde(default)]
+    pub memory_total_bytes: Option<u64>,
+    #[serde(default)]
+    pub disks: Vec<DiskUse>,
+    /// Applications on the host, and how many of them have problems.
+    #[serde(default)]
+    pub apps: u32,
+    #[serde(default)]
+    pub apps_in_trouble: u32,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct DiskUse {
+    pub path: String,
+    pub used_percent: u8,
+    /// `DISK_FILLING` is open for it.
+    #[serde(default)]
+    pub filling: bool,
 }
 
 /// A URL the server probes. `Unknown` until its first probe.
@@ -172,10 +204,23 @@ pub struct CustomerOverview {
 pub struct Overview {
     pub ts: Timestamp,
     pub status: Status,
+    /// Grouped by customer, for views older than `problems` and `hosts`; to be removed.
     #[serde(default)]
     pub customers: Vec<CustomerOverview>,
     #[serde(default)]
     pub muted_count: u32,
+    /// Open, unmuted incidents of every host and application.
+    #[serde(default)]
+    pub problems: Vec<IncidentView>,
+    /// Every host, most urgent first.
+    #[serde(default)]
+    pub hosts: Vec<HostOverview>,
+}
+
+/// `GET /api/hosts`.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct HostList {
+    pub hosts: Vec<HostOverview>,
 }
 
 /// One application: discovered from its workloads, described by the configuration.

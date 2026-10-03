@@ -1,10 +1,9 @@
-use super::apps;
-use super::views::{self, incident_view};
+use super::snapshot::{MAX_ROWS, Snapshot};
+use super::views;
 use super::{ApiError, AppState, ReportingHost};
 use crate::ingest::{IngestError, MAX_AHEAD, ingest};
-use crate::store::hosts::WorkloadRow;
-use crate::store::probes::ProbeRow;
-use crate::store::{history, hosts, incidents, probes};
+use crate::lifecycle::Incident;
+use crate::store::{history, incidents};
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
@@ -15,16 +14,11 @@ use skym_core::model::ExceptionClass;
 use skym_core::subject::{AppKey, Subject, WorkloadKey};
 use skym_core::time::parse_since;
 use skym_core::view::{
-    AppList, AppSummary, AppView, EndpointOverview, ExceptionList, HostView, IncidentList,
-    IncidentView, Overview, Timeline, WorkloadView, workload_summary,
+    AppList, AppView, ExceptionList, HostList, HostView, IncidentList, IncidentView, Overview,
+    Timeline, WorkloadView, workload_summary,
 };
-use std::collections::BTreeMap;
 
 type ApiResult<T> = Result<Json<T>, ApiError>;
-
-/// Generous bound on rows read for one response; lists are cut to `limit` afterwards.
-/// Mutes live in the configuration, so muted incidents are filtered after this bound.
-const MAX_ROWS: usize = 10_000;
 
 pub async fn report(
     State(s): State<AppState>,
@@ -43,10 +37,11 @@ pub async fn report(
 pub async fn index() -> Json<Value> {
     Json(json!({
         "endpoints": [
-            { "path": "/api/overview", "answers": "where is something wrong right now" },
+            { "path": "/api/overview", "answers": "where is something wrong right now: problems (each with its app, else its host) and hosts" },
             { "path": "/api/apps", "answers": "which applications exist, where, and are they up" },
             { "path": "/api/apps/{host}/{project}", "answers": "this application: its note, URLs and services (lone containers and systemd units: /api/apps/{host}/{project}/{service})" },
-            { "path": "/api/hosts/{host}", "answers": "what is going on with this host" },
+            { "path": "/api/hosts", "answers": "every host: status, resources, applications" },
+            { "path": "/api/hosts/{host}", "answers": "what is going on with this host, and its applications" },
             { "path": "/api/hosts/{host}/workloads/{project}/{service}", "answers": "what is going on with this application" },
             { "path": "/api/timeline", "params": "host (required), workload (project/service), since (default 6h), limit", "answers": "when did it start, what else happened" },
             { "path": "/api/incidents", "params": "status (open|resolved, default open), host, code, since (resolved only, default 24h), include_muted (default false), limit (default 100, at most 1000)", "answers": "incident history" },
@@ -79,44 +74,31 @@ fn workload_key(host: &str, workload: &str) -> Result<WorkloadKey, ApiError> {
 }
 
 pub async fn overview(State(s): State<AppState>) -> ApiResult<Overview> {
-    let now = Timestamp::now();
-    let (all, probed, open, stopped) = s
-        .store
-        .call(|c| {
-            let open = incidents::listed(c, true, None, None, Timestamp::UNIX_EPOCH, MAX_ROWS)?;
-            let stopped = hosts::stopped_since(c, &open)?;
-            Ok((hosts::all(c)?, probes::all(c)?, open, stopped))
-        })
-        .await?;
-    let probed = probed.into_iter().map(|p| (p.url.clone(), p)).collect();
-    let seen = all
-        .into_iter()
-        .map(|h| (h.id, views::Seen { first: h.first_seen, last: h.last_seen }))
-        .collect();
-    let views: Vec<IncidentView> =
-        open.iter().map(|i| incident_view(i, &s.cfg.mute, &stopped, now)).collect();
-    Ok(Json(views::overview(&s.cfg, &s.probed, &seen, &probed, &views, now)))
+    let snap = Snapshot::read(&s).await?;
+    let open = snap.views(&s, &snap.open);
+    let apps = snap.apps(&s, &open);
+    Ok(Json(views::overview(&s.cfg, &snap.hosts, &apps, &open, snap.now)))
+}
+
+pub async fn hosts(State(s): State<AppState>) -> ApiResult<HostList> {
+    let snap = Snapshot::read(&s).await?;
+    let open = snap.views(&s, &snap.open);
+    let apps = snap.apps(&s, &open);
+    Ok(Json(HostList { hosts: views::hosts(&s.cfg, &snap.hosts, &apps, &open, snap.now) }))
 }
 
 pub async fn host(State(s): State<AppState>, Path(host): Path<String>) -> ApiResult<HostView> {
     configured(&s, &host)?;
-    let now = Timestamp::now();
-    let id = host.clone();
-    let (row, workloads, open) = s
-        .store
-        .call(move |c| {
-            Ok((
-                hosts::get(c, &id)?,
-                hosts::workloads(c, &id)?,
-                incidents::listed(c, true, Some(&id), None, Timestamp::UNIX_EPOCH, MAX_ROWS)?,
-            ))
-        })
-        .await?;
-    let stopped =
-        workloads.iter().filter_map(|w| Some((w.key.clone(), w.state.stopped_since()?))).collect();
-    let incidents = open.iter().map(|i| incident_view(i, &s.cfg.mute, &stopped, now)).collect();
-    let customer = s.cfg.hosts.iter().find(|h| h.id == host).map(|h| h.customer.clone());
-    Ok(Json(views::host(host, customer, row, workloads, incidents, now)))
+    let snap = Snapshot::read(&s).await?;
+    let open = snap.views(&s, &snap.open);
+    let apps = snap.apps(&s, &open);
+    let mine: Vec<Incident> =
+        snap.open.iter().filter(|i| i.host.as_ref() == Some(&host)).cloned().collect();
+    let row = snap.hosts.iter().find(|h| h.id == host).cloned();
+    let workloads = snap.workloads.iter().filter(|w| w.key.host == host).cloned().collect();
+    let incidents = snap.views(&s, &mine);
+    let apps = apps.into_iter().filter(|a| a.key.host == host).collect();
+    Ok(Json(views::host(host, row, workloads, incidents, apps, snap.now)))
 }
 
 pub async fn workload(
@@ -124,31 +106,25 @@ pub async fn workload(
     Path((host, project, service)): Path<(String, String, String)>,
 ) -> ApiResult<WorkloadView> {
     configured(&s, &host)?;
-    let now = Timestamp::now();
     let key = WorkloadKey { host: host.clone(), project, service };
     let subject = Subject::Workload(key.clone());
+    let snap = Snapshot::read(&s).await?;
+    let row = snap.workloads.iter().find(|w| w.key == key).cloned();
+    let row = row.ok_or_else(|| ApiError::not_found(format!("workload {subject} is unknown")))?;
+    let now = snap.now;
     let (k, sub) = (key.clone(), subject.clone());
-    let (row, open, exceptions, events) = s
+    let (exceptions, events) = s
         .store
         .call(move |c| {
-            let row = hosts::workloads(c, &k.host)?.into_iter().find(|w| w.key == k);
-            let open =
-                incidents::listed(c, true, Some(&k.host), None, Timestamp::UNIX_EPOCH, MAX_ROWS)?;
             let hour = now - jiff::SignedDuration::from_hours(1);
             let exceptions =
                 history::exceptions(c, &k.host, (hour, now + MAX_AHEAD), Some(&k), None)?;
             let day = now - jiff::SignedDuration::from_hours(24);
-            Ok((row, open, exceptions, history::events(c, &k.host, Some(&sub), day, 50)?))
+            Ok((exceptions, history::events(c, &k.host, Some(&sub), day, 50)?))
         })
         .await?;
-    let row = row.ok_or_else(|| ApiError::not_found(format!("workload {subject} is unknown")))?;
-    let stopped = row.state.stopped_since().map(|t| (row.key.clone(), t)).into_iter().collect();
-    let incidents = open
-        .iter()
-        .filter(|i| i.subject == subject)
-        .map(|i| incident_view(i, &s.cfg.mute, &stopped, now))
-        .collect();
-    Ok(Json(views::workload(row, incidents, exceptions, events)))
+    let mine: Vec<Incident> = snap.open.iter().filter(|i| i.subject == subject).cloned().collect();
+    Ok(Json(views::workload(row, snap.views(&s, &mine), exceptions, events)))
 }
 
 #[derive(Deserialize)]
@@ -206,17 +182,14 @@ pub async fn incidents(
     let from = since(q.since.as_deref(), "24h", now)?;
     let n = limit(q.limit);
     let host = q.host.clone();
-    let (rows, stopped) = s
+    let rows = s
         .store
-        .call(move |c| {
-            let rows = incidents::listed(c, open, host.as_deref(), code, from, MAX_ROWS)?;
-            let stopped = hosts::stopped_since(c, &rows)?;
-            Ok((rows, stopped))
-        })
+        .call(move |c| Ok(incidents::listed(c, open, host.as_deref(), code, from, MAX_ROWS)?))
         .await?;
-    let views: Vec<IncidentView> = rows
-        .iter()
-        .map(|i| incident_view(i, &s.cfg.mute, &stopped, now))
+    let snap = Snapshot::read(&s).await?;
+    let views: Vec<IncidentView> = snap
+        .views(&s, &rows)
+        .into_iter()
         .filter(|i| q.include_muted.unwrap_or(false) || !i.muted)
         .collect();
     let (incidents, truncated) = views::cap(views, n);
@@ -259,37 +232,10 @@ pub async fn exceptions(
     Ok(Json(ExceptionList { exceptions, truncated }))
 }
 
-/// Everything the applications are made of, read in one go.
-async fn app_data(
-    s: &AppState,
-    now: Timestamp,
-) -> Result<(Vec<WorkloadRow>, Vec<AppSummary>), ApiError> {
-    let (workloads, probed, open, deployed) = s
-        .store
-        .call(|c| {
-            let open = incidents::listed(c, true, None, None, Timestamp::UNIX_EPOCH, MAX_ROWS)?;
-            Ok((hosts::all_workloads(c)?, probes::all(c)?, open, history::last_deployed(c)?))
-        })
-        .await?;
-    let stopped =
-        workloads.iter().filter_map(|w| Some((w.key.clone(), w.state.stopped_since()?))).collect();
-    let views: Vec<IncidentView> =
-        open.iter().map(|i| incident_view(i, &s.cfg.mute, &stopped, now)).collect();
-    let probed: BTreeMap<String, ProbeRow> =
-        probed.into_iter().map(|p| (p.url.clone(), p)).collect();
-    let endpoints: Vec<EndpointOverview> = s
-        .probed
-        .iter()
-        .filter(|e| e.app.is_some())
-        .map(|e| views::endpoint(e, probed.get(&e.url), &views, s.cfg.report_interval, now))
-        .collect();
-    let apps = apps::summaries(&workloads, &s.cfg.apps, &endpoints, &views, &deployed);
-    Ok((workloads, apps))
-}
-
 pub async fn apps(State(s): State<AppState>) -> ApiResult<AppList> {
-    let (_, apps) = app_data(&s, Timestamp::now()).await?;
-    Ok(Json(AppList { apps }))
+    let snap = Snapshot::read(&s).await?;
+    let open = snap.views(&s, &snap.open);
+    Ok(Json(AppList { apps: snap.apps(&s, &open) }))
 }
 
 pub async fn app(
@@ -308,12 +254,15 @@ pub async fn lone_app(
 
 /// One application with its workloads, each with its own status.
 async fn one_app(s: AppState, key: AppKey) -> ApiResult<AppView> {
-    let (workloads, apps) = app_data(&s, Timestamp::now()).await?;
-    let app = apps
+    let snap = Snapshot::read(&s).await?;
+    let open = snap.views(&s, &snap.open);
+    let app = snap
+        .apps(&s, &open)
         .into_iter()
         .find(|a| a.key == key)
         .ok_or_else(|| ApiError::not_found(format!("app {key} is unknown")))?;
-    let workloads = workloads
+    let workloads = snap
+        .workloads
         .into_iter()
         .filter(|w| key.contains(&w.key))
         .map(|w| {
