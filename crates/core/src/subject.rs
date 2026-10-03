@@ -38,6 +38,20 @@ pub struct AppKey {
     pub service: Option<String>,
 }
 
+/// Percent-encodes all but unreserved characters (a replica is `api#2`), for one segment
+/// or value of an API URL.
+pub fn encode(segment: &str) -> String {
+    segment
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// Projects that name no application: each of their workloads is one.
 fn lone(project: &str) -> bool {
     project == "-" || project == "_systemd"
@@ -47,6 +61,17 @@ impl AppKey {
     /// A systemd unit: declared in the agent's configuration, so its absence is `WORKLOAD_DOWN`.
     pub fn is_unit(&self) -> bool {
         self.project == "_systemd"
+    }
+
+    /// How to call it without a configured name: the project, or the lone service.
+    pub fn label(&self) -> &str {
+        self.service.as_deref().unwrap_or(&self.project)
+    }
+
+    /// Its view in the query API, each segment percent-encoded.
+    pub fn path(&self) -> String {
+        let service = self.service.as_deref().map_or(String::new(), |s| format!("/{}", encode(s)));
+        format!("/api/apps/{}/{}{service}", encode(&self.host), encode(&self.project))
     }
 
     /// The application a workload belongs to.

@@ -8,7 +8,7 @@ use crate::store::probes::ProbeRow;
 use jiff::{SignedDuration, Timestamp};
 use skym_core::model::{Event, ExceptionGroup};
 use skym_core::rules::{IncidentCode, Severity};
-use skym_core::subject::{AppKey, CustomerId, HostId, Subject, WorkloadKey};
+use skym_core::subject::{AppKey, CustomerId, HostId, Subject, WorkloadKey, encode};
 use skym_core::time::format_duration;
 use skym_core::view::{
     CustomerOverview, EndpointOverview, HostOverview, HostView, IncidentView, Overview, Status,
@@ -78,34 +78,15 @@ pub fn links(subject: &Subject) -> BTreeMap<String, String> {
                     format!("/api/exceptions?host={h}&workload={p}/{s}&since=1h"),
                 ),
                 ("incidents".to_string(), format!("/api/incidents?host={h}")),
-                ("app".to_string(), app_link(&AppKey::of(k))),
+                ("app".to_string(), AppKey::of(k).path()),
             ])
         }
         Subject::App(a) => BTreeMap::from([
-            ("app".to_string(), app_link(a)),
+            ("app".to_string(), a.path()),
             ("host".to_string(), format!("/api/hosts/{}", encode(&a.host))),
         ]),
         Subject::Endpoint(_) | Subject::Unknown(_) => BTreeMap::new(),
     }
-}
-
-/// Where an application's view is.
-pub fn app_link(a: &AppKey) -> String {
-    let service = a.service.as_ref().map_or(String::new(), |s| format!("/{}", encode(s)));
-    format!("/api/apps/{}/{}{service}", encode(&a.host), encode(&a.project))
-}
-
-/// Percent-encodes everything but unreserved characters (a replica is `api#2`).
-pub fn encode(segment: &str) -> String {
-    segment
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 /// A host that never reported, or an endpoint without a recent probe, is unknown.

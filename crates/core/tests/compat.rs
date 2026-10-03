@@ -316,5 +316,8 @@ fn workloads_belong_to_their_project_or_stand_alone() {
     assert!(!app("i/-/hbbs").contains(&w("workload:i/-/hbbr")));
     assert_eq!(serde_json::to_string(&app("i/-/hbbs")).unwrap(), "\"i/-/hbbs\"");
     assert!(app("x/_systemd/xray").is_unit());
+    assert_eq!((app("y/nile").label(), app("i/-/hbbs").label()), ("nile", "hbbs"));
+    assert_eq!(app("i/-/api#2").path(), "/api/apps/i/-/api%232");
+    assert_eq!(app("y/nile").path(), "/api/apps/y/nile");
     assert!(!app("i/-/hbbs").is_unit() && !app("y/nile").is_unit());
 }

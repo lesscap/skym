@@ -82,9 +82,10 @@ impl App {
         self.stack.pop();
         let stale = match &self.frame().screen {
             Screen::Overview | Screen::Apps => false,
-            Screen::Host(h) => self.host.value.as_ref().is_some_and(|v| v.id != *h),
-            Screen::Workload(k) => self.workload.value.as_ref().is_some_and(|v| v.key != *k),
-            Screen::App(a) => self.app.value.as_ref().is_some_and(|v| v.app.key != *a),
+            // Nothing held (its answer was dropped while away, or failed) is read again too.
+            Screen::Host(h) => self.host.value.as_ref().is_none_or(|v| v.id != *h),
+            Screen::Workload(k) => self.workload.value.as_ref().is_none_or(|v| v.key != *k),
+            Screen::App(a) => self.app.value.as_ref().is_none_or(|v| v.app.key != *a),
             Screen::Exceptions(_) | Screen::Timeline { .. } => true,
         };
         if !stale {
