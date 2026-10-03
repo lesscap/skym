@@ -100,6 +100,14 @@ skym-view --server https://skym.example.com
 
 Install the new `skym-view` first, then the server, then the agents. Newer servers may send subjects and fields older views do not know; newer agents may send fields older servers ignore.
 
+Going back to an older server: a server older than applications cannot read the `app:` incidents a newer one stored, and stops taking reports from those hosts. Stop the server, remove them with their history, then start the older one:
+
+```sh
+sqlite3 /data/skym.db "DELETE FROM incident_log WHERE incident_id IN
+  (SELECT id FROM incidents WHERE subject LIKE 'app:%');
+  DELETE FROM incidents WHERE subject LIKE 'app:%';"
+```
+
 ## AI agents
 
 Give the agent the [skill](../skill/SKILL.md) and a reader token, as `SKYM_URL` and `SKYM_TOKEN` in its environment or in `~/.config/skym/env`.

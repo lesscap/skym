@@ -1,12 +1,12 @@
 //! Applications: workloads grouped by application, described by the configuration. Pure.
 
-use super::views::{app_link, encode, status};
+use super::views::status;
 use crate::config::AppConfig;
 use crate::store::hosts::WorkloadRow;
 use jiff::Timestamp;
 use skym_core::model::RunState;
 use skym_core::rules::IncidentCode;
-use skym_core::subject::{AppKey, Subject, WorkloadKey};
+use skym_core::subject::{AppKey, Subject, WorkloadKey, encode};
 use skym_core::view::{AppSummary, EndpointOverview, IncidentView};
 use std::collections::BTreeMap;
 
@@ -51,9 +51,7 @@ fn summary(
     let incidents: Vec<IncidentView> =
         open.iter().filter(|i| !i.muted && belongs(i, &key, &endpoints)).cloned().collect();
     AppSummary {
-        name: config
-            .and_then(|c| c.name.clone())
-            .unwrap_or_else(|| key.service.clone().unwrap_or_else(|| key.project.clone())),
+        name: config.and_then(|c| c.name.clone()).unwrap_or_else(|| key.label().to_string()),
         env: config.and_then(|c| c.env.clone()),
         note: config.and_then(|c| c.note.clone()),
         configured: config.is_some(),
@@ -64,7 +62,7 @@ fn summary(
         endpoints,
         incidents,
         links: BTreeMap::from([
-            ("app".to_string(), app_link(&key)),
+            ("app".to_string(), key.path()),
             ("host".to_string(), format!("/api/hosts/{}", encode(&key.host))),
         ]),
         key,

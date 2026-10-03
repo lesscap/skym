@@ -467,3 +467,11 @@ fn going_back_to_the_same_host_reads_nothing_again() {
     assert!(press(&mut app, &[Key::Esc]).is_empty(), "the host's data is its own");
     assert!(app.host.value.is_some());
 }
+
+#[test]
+fn going_back_to_a_screen_whose_answer_never_came_reads_it() {
+    let mut app = loaded();
+    assert_eq!(press(&mut app, &[Key::Down, Key::Enter]), [Request::Host("x".into())]);
+    press(&mut app, &[Key::Char('a')]); // before the host's answer: it will be dropped
+    assert_eq!(press(&mut app, &[Key::Esc]), [Request::Host("x".into())]);
+}

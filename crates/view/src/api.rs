@@ -1,7 +1,7 @@
 //! The query API of `skym-server`, read into the core view types.
 
 use serde::de::DeserializeOwned;
-use skym_core::subject::{AppKey, HostId, WorkloadKey};
+use skym_core::subject::{AppKey, HostId, WorkloadKey, encode};
 use skym_core::view::{
     AppList, AppView, ExceptionList, HostView, IncidentList, Overview, Timeline, WorkloadView,
 };
@@ -68,25 +68,9 @@ impl Request {
                 format!("/api/timeline?host={}{workload}&since={since}&limit=500", encode(host))
             }
             Request::Apps => "/api/apps".into(),
-            Request::App(a) => {
-                let service =
-                    a.service.as_ref().map_or(String::new(), |s| format!("/{}", encode(s)));
-                format!("/api/apps/{}/{}{service}", encode(&a.host), encode(&a.project))
-            }
+            Request::App(a) => a.path(),
         }
     }
-}
-
-fn encode(segment: &str) -> String {
-    segment
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 pub struct Client {
