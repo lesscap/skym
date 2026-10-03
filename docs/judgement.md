@@ -79,17 +79,17 @@ Some conditions are known and accepted: a container that is always unhealthy, a 
 
 ```toml
 [[mute]]
-subject = "workload:x/legacy/worker"
+subject = "workload:web-1/legacy/worker"
 code = "WORKLOAD_UNHEALTHY"
 reason = "known issue, no business impact"
 
 [[mute]]
-subject = "mount:i:/data"
+subject = "mount:db-1:/data"
 code = "DISK_FILLING"
 until = "2026-12-31T00:00:00Z"
 ```
 
-`subject` is a subject string as the API returns it (`host:x`, `workload:x/project/service`, `mount:x:/path`); `until` is an RFC 3339 time. Host-wide codes such as `LOG_UNBOUNDED` are muted on `host:x`, which also covers containers added later.
+`subject` is a subject string as the API returns it (`host:web-1`, `workload:web-1/project/service`, `mount:web-1:/path`); `until` is an RFC 3339 time. Host-wide codes such as `LOG_UNBOUNDED` are muted on `host:web-1`, which also covers containers added later.
 
 ```text
 muted(incident) ⇔ ∃ m ∈ mute: m.subject = incident.subject

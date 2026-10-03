@@ -62,10 +62,10 @@ Event.subject    ∈ Host ∪ Workload
 Incidents and events point at a subject, written everywhere (API, configuration, storage) as one string:
 
 ```text
-host:<host>                          host:i
-workload:<host>/<project>/<service>  workload:i/dify/weaviate
-mount:<host>:<path>                  mount:i:/data
-endpoint:<url>                       endpoint:https://vocra.io
+host:<host>                          host:web-1
+workload:<host>/<project>/<service>  workload:web-1/shop/search
+mount:<host>:<path>                  mount:web-1:/data
+endpoint:<url>                       endpoint:https://shop.example.com
 ```
 
 ### Workload identity

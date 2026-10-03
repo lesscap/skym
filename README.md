@@ -4,27 +4,124 @@ Agent-first monitoring for a handful of Linux hosts and the containers running o
 
 A small `skym` binary runs on every host. It checks the host, its containers and the applications inside them, then pushes a compact report to `skym-server` over outbound HTTPS. The server keeps the latest state, turns changes into events and problems into incidents, and exposes everything through a JSON API that an AI agent can read directly. People read the same API in a terminal with `skym-view`.
 
-What makes it different:
+## What it watches
+
+| Subject | Checks |
+| --- | --- |
+| Hosts | still reporting (heartbeat), disks filling up (with a 7-day projection), OOM kills, reboots and kernel changes |
+| Containers | down, unhealthy (with the failing check's output), crash loops, OOM kills, logs without a size limit, deployments and configuration changes |
+| Datastores | Postgres, MySQL and Redis containers answering a local probe; Postgres replication lag |
+| systemd units | declared services running and listening on their ports |
+| Applications | exceptions they write to stdout or stderr, grouped by component and code |
+
+Thresholds, severities, and when an incident opens or resolves are decided by skym, not by whoever reads the result: see the [judgement rules](docs/judgement.md).
+
+## How it fits together
+
+```text
+ every host                         a machine you control              you
+┌──────────────┐  HTTPS, outbound  ┌──────────────────┐   GET   ┌──────────────────────┐
+│ skym agent   │ ────────────────▶ │ skym-server      │ ◀────── │ AI agent + skill     │
+│ (systemd)    │  a report a       │ SQLite, JSON API │ ◀────── │ skym-view (terminal) │
+└──────────────┘  minute           └──────────────────┘         └──────────────────────┘
+```
+
+- **Push only.** Hosts open no port and the server never connects to them; a host that goes quiet is itself the alarm.
+- **The server is an API.** It judges and stores; it serves no web pages.
+- **One API for people and agents.** `skym-view` and an AI agent read the same endpoints and see the same judgements.
+
+## What makes it different
 
 - **Built for agents first.** Every command and endpoint returns stable, self-describing JSON with judgements already made (`incidents[]`, `severity`, `open_for`), so an agent can reason about causes instead of re-deriving thresholds.
 - **Safe to run on machines you don't own.** The host only makes outbound requests, the server never sends commands back, and credentials never leave the host.
 - **Application exceptions with business meaning.** Applications write one structured JSON line to stdout/stderr; skym groups failures by component and code, separates business failures from system failures, and links them to deployments and restarts on the same host.
 
+## A look
+
+The `skym-view` overview. New problems come first; `≥` means the problem was already there when skym started watching, so it has lasted at least that long:
+
+```text
+ skym · skym.example.com   ✗ 1 critical   ! 1 warn   ✓ 1 ok   updated 3s ago
+┌ Hosts ▪ ───────────────┐┌ Problems · all hosts ──────────────────────────────────────────┐
+│▸ All hosts             ││    NEW                                                         │
+│acme                    ││ ✗  web-1    api                exited (1), for 4m          4m  │
+│  ✗ web-1          12s  ││    ONGOING                                                     │
+│  ! db-1            8s  ││ !  db-1     postgres           replication lag 45s        ≥6h  │
+│  ✓ edge-1         21s  ││             · 2 hygiene items (h)                              │
+└────────────────────────┘└────────────────────────────────────────────────────────────────┘
+ ↑↓ move  ⏎ open  ⇥ pane  / filter  h hygiene  m muted  r refresh  ? help  q quit
+```
+
+The same problem, as an AI agent reads it from `GET /api/overview` (trimmed):
+
+```json
+{
+  "status": "critical",
+  "customers": [{
+    "id": "acme",
+    "hosts": [{
+      "id": "web-1",
+      "status": "critical",
+      "last_report_ago": "12s",
+      "incidents": [{
+        "subject": "workload:web-1/shop/api",
+        "code": "WORKLOAD_DOWN",
+        "severity": "critical",
+        "detail": "exited (1), for 4m",
+        "open_for": "4m",
+        "links": {
+          "workload": "/api/hosts/web-1/workloads/shop/api",
+          "timeline": "/api/timeline?host=web-1&workload=shop/api&since=6h"
+        }
+      }]
+    }]
+  }]
+}
+```
+
+## Quick start
+
+From source; the [installation guide](docs/install.md) has the details.
+
+1. **Build** static Linux binaries for the hosts, and the view for your own machine:
+
+   ```sh
+   cargo zigbuild --release -p skym-agent -p skym-server --target x86_64-unknown-linux-musl
+   cargo install --path crates/view
+   ```
+
+2. **Server.** Make a token for each host and each reader, write the configuration from [`deploy/server.example.toml`](deploy/server.example.toml) (it holds only the tokens' hashes), and run it behind a reverse proxy that terminates TLS:
+
+   ```sh
+   skym-server token
+   skym-server serve --config /etc/skym-server/config.toml
+   ```
+
+3. **Agent**, on each host: install `skym`, put [`deploy/config.example.toml`](deploy/config.example.toml) at `/etc/skym/config.toml` and the host's token at `/etc/skym/token`, check the setup, then start [`deploy/skym.service`](deploy/skym.service):
+
+   ```sh
+   sudo -u skym skym doctor
+   systemctl enable --now skym
+   ```
+
+4. **Look.** With `SKYM_URL` and `SKYM_TOKEN` (a reader token) in `~/.config/skym/env`:
+
+   ```sh
+   skym-view
+   ```
+
+   Or give an AI agent the [skill](skill/SKILL.md) and the same two values.
+
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Domain model](docs/domain-model.md)
-- [Report protocol](docs/report-protocol.md)
-- [Exception protocol](docs/exception-protocol.md)
-- [Judgement rules](docs/judgement.md)
-- [Query API](docs/api.md)
-- [skym CLI](docs/cli.md)
-- [Installation](docs/install.md)
-- [Skill for AI agents](skill/SKILL.md)
+- **Run it:** [installation](docs/install.md), [the `skym` CLI](docs/cli.md)
+- **Read it:** [query API](docs/api.md), [skill for AI agents](skill/SKILL.md)
+- **Report from an application:** [exception protocol](docs/exception-protocol.md)
+- **How it works:** [architecture](docs/architecture.md), [domain model](docs/domain-model.md), [report protocol](docs/report-protocol.md), [judgement rules](docs/judgement.md)
 
 ## Status
 
-Under development; not released yet. Build from source with `cargo build --release`.
+Under development; no releases yet.
 
 | Part | State |
 | --- | --- |

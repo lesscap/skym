@@ -1,6 +1,6 @@
 # Query API
 
-The API `skym-server` offers to AI agents and, later, to the UI. It is read-only. Reports from hosts use a separate endpoint described in the [report protocol](report-protocol.md).
+The API `skym-server` offers to AI agents and to `skym-view`. It is read-only. Reports from hosts use a separate endpoint described in the [report protocol](report-protocol.md).
 
 ## Design
 
@@ -72,11 +72,11 @@ token_sha256 = "…"
   "status": "critical",
   "customers": [
     {
-      "id": "lesscap",
+      "id": "acme",
       "status": "critical",
       "hosts": [
         {
-          "id": "i",
+          "id": "web-1",
           "status": "critical",
           "last_report_ago": "40s",
           "observed_since": "2026-09-01T08:00:00Z",
@@ -85,24 +85,24 @@ token_sha256 = "…"
             {
               "code": "CRASH_LOOP",
               "severity": "critical",
-              "subject": "workload:i/dify/weaviate",
+              "subject": "workload:web-1/shop/search",
               "opened_at": "2026-10-01T06:05:00Z",
               "open_for": "25m",
               "detail": "12 restarts in the last hour",
               "links": {
-                "workload": "/api/hosts/i/workloads/dify/weaviate",
-                "timeline": "/api/timeline?host=i&workload=dify/weaviate&since=6h"
+                "workload": "/api/hosts/web-1/workloads/shop/search",
+                "timeline": "/api/timeline?host=web-1&workload=shop/search&since=6h"
               }
             }
           ],
-          "links": { "host": "/api/hosts/i" }
+          "links": { "host": "/api/hosts/web-1" }
         },
         {
-          "id": "x",
+          "id": "web-2",
           "status": "ok",
           "last_report_ago": "12s",
           "incidents": [],
-          "links": { "host": "/api/hosts/x" }
+          "links": { "host": "/api/hosts/web-2" }
         }
       ]
     }

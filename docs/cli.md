@@ -18,7 +18,7 @@
 
 ```
 host i · 1 critical · 1 warn
-CRIT  dify/weaviate     CRASH_LOOP       12 restarts in the last hour
+CRIT  shop/search       CRASH_LOOP       12 restarts in the last hour
 WARN  /data             DISK_FILLING     87% used
 ```
 

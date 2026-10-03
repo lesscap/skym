@@ -20,7 +20,7 @@ every host                                  your own machine
 | --- | --- | --- |
 | `skym` | every monitored host | One binary. As a CLI it answers "how is this host right now" locally. As `skym agent` it collects on a fixed interval and pushes a report. |
 | `skym-server` | a machine you control | Receives reports, stores the latest state, derives events and incidents, detects lost heartbeats, serves the query API. |
-| skill (planned) | the agent's side | A document that tells an AI agent how to call the API and read the results. |
+| [skill](../skill/SKILL.md) | the agent's side | A document that tells an AI agent how to call the API and read the results. |
 | `skym-view` | your own machine | A read-only terminal view over the same API. It contains no judgement of its own. |
 
 ## Principles
