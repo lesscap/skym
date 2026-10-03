@@ -45,7 +45,7 @@ async fn serve(path: &std::path::Path) -> anyhow::Result<()> {
     let store = Store::new(db::open(&cfg.database)?);
     let listen = cfg.listen;
     let state = AppState::new(store, cfg, jiff::Timestamp::now());
-    tasks::spawn(state.clone());
+    tasks::spawn(state.store.clone(), state.cfg.clone(), state.started);
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!("listening on {listen}");
     axum::serve(listener, router(state))

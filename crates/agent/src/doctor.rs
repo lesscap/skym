@@ -1,6 +1,6 @@
 //! `skym doctor`: is this installation ready to report? Ends by sending one real report.
 
-use crate::commands::pass;
+use crate::collect::{self, Collected};
 use crate::config::Config;
 use crate::deliver::{self, Client};
 use crate::exceptions::Detail;
@@ -18,6 +18,7 @@ enum Mark {
     Fail,
 }
 
+/// Prints one check; whether it failed.
 fn show(mark: Mark, what: &str) -> bool {
     let sign = match mark {
         Mark::Ok => "✓",
@@ -28,73 +29,90 @@ fn show(mark: Mark, what: &str) -> bool {
     matches!(mark, Mark::Fail)
 }
 
-/// Exit code 1 when any check fails.
+/// Exit code 1 when any check fails. Without a server, a token or a reachable server
+/// the later checks cannot run.
 pub async fn run(cfg: &Config) -> anyhow::Result<u8> {
     let Some(server) = cfg.server.as_deref() else {
         show(Mark::Fail, "server: not set in the configuration");
         return Ok(1);
     };
     show(Mark::Ok, &format!("server: {server}"));
-    let token = match deliver::read_token(&cfg.token_file) {
-        Ok(token) => token,
-        Err(e) => {
-            show(Mark::Fail, &format!("token: {e:#}"));
-            return Ok(1);
-        }
-    };
-    let mode = std::fs::metadata(&cfg.token_file)?.permissions().mode();
-    match mode & 0o077 {
-        0 => show(Mark::Ok, &format!("token: {}", cfg.token_file.display())),
-        _ => show(
-            Mark::Warn,
-            &format!("token: {} is readable by others; chmod 600 it", cfg.token_file.display()),
-        ),
-    };
-    let state = &cfg.state_dir;
-    let failed_state = match writable(state) {
-        Ok(()) => show(Mark::Ok, &format!("state: {} is writable", state.display())),
-        Err(e) => show(Mark::Fail, &format!("state: {e:#}")),
-    };
+    let Some(token) = token(&cfg.token_file) else { return Ok(1) };
+    let mut failed = state(&cfg.state_dir);
     let now = Timestamp::now();
-    let (host, c) = pass(cfg, now, now - cfg.interval, Detail::Report).await;
-    let collected = format!("collection: {} workloads", c.workloads.len());
-    let mut failed = failed_state
-        | match (c.all_failed, c.errors.len()) {
-            (true, _) => show(Mark::Fail, "collection: every source failed (errors above)"),
-            (false, 0) => show(Mark::Ok, &collected),
-            (false, n) => {
-                show(Mark::Warn, &format!("{collected}; {n} sources failed (errors above)"))
-            }
-        };
+    let (host, c) = collect::once(cfg, now, now - cfg.interval, Detail::Report).await;
+    failed |= collection(&c);
     let client = Client::new(server, token)?;
-    match client.healthz().await {
-        Ok((200, _)) => show(Mark::Ok, "server reachable"),
-        Ok((status, _)) => {
-            return Ok(u8::from(show(
-                Mark::Fail,
-                &format!("server answered /healthz with {status}"),
-            )));
-        }
-        Err(e) => return Ok(u8::from(show(Mark::Fail, &format!("server unreachable: {e}")))),
-    };
+    if !reachable(&client).await {
+        return Ok(1);
+    }
     // Without exception groups: a running `skym agent` reads and reports those log lines.
     let report = Report { exceptions: Vec::new(), ..report::build(&c, &host, now) };
-    let sent = client.send(outbox::gzip(&report)?).await;
-    failed |= match sent {
+    failed |= rejected(&client, &report).await?;
+    Ok(u8::from(failed))
+}
+
+/// The token, if readable; warns when others can read it too.
+fn token(path: &Path) -> Option<String> {
+    let token = deliver::read_token(path)
+        .and_then(|t| Ok((t, std::fs::metadata(path)?.permissions().mode())));
+    match token {
+        Ok((token, mode)) if mode & 0o077 == 0 => {
+            show(Mark::Ok, &format!("token: {}", path.display()));
+            Some(token)
+        }
+        Ok((token, _)) => {
+            let what = format!("token: {} is readable by others; chmod 600 it", path.display());
+            show(Mark::Warn, &what);
+            Some(token)
+        }
+        Err(e) => {
+            show(Mark::Fail, &format!("token: {e:#}"));
+            None
+        }
+    }
+}
+
+fn state(dir: &Path) -> bool {
+    match writable(dir) {
+        Ok(()) => show(Mark::Ok, &format!("state: {} is writable", dir.display())),
+        Err(e) => show(Mark::Fail, &format!("state: {e:#}")),
+    }
+}
+
+/// The outbox can be created and written to, as the user running this.
+fn writable(dir: &Path) -> anyhow::Result<()> {
+    Outbox::open(dir)?;
+    let probe = dir.join("outbox/doctor.tmp");
+    std::fs::write(&probe, b"").with_context(|| format!("cannot write {}", probe.display()))?;
+    Ok(std::fs::remove_file(&probe)?)
+}
+
+fn collection(c: &Collected) -> bool {
+    let collected = format!("collection: {} workloads", c.workloads.len());
+    match (c.all_failed, c.errors.len()) {
+        (true, _) => show(Mark::Fail, "collection: every source failed (errors above)"),
+        (false, 0) => show(Mark::Ok, &collected),
+        (false, n) => show(Mark::Warn, &format!("{collected}; {n} sources failed (errors above)")),
+    }
+}
+
+async fn reachable(client: &Client) -> bool {
+    let failed = match client.healthz().await {
+        Ok((200, _)) => show(Mark::Ok, "server reachable"),
+        Ok((status, _)) => show(Mark::Fail, &format!("server answered /healthz with {status}")),
+        Err(e) => show(Mark::Fail, &format!("server unreachable: {e}")),
+    };
+    !failed
+}
+
+async fn rejected(client: &Client, report: &Report) -> anyhow::Result<bool> {
+    Ok(match client.send(outbox::gzip(report)?).await {
         Ok((200..=299, _)) => show(Mark::Ok, "report accepted"),
         Ok((401 | 403, _)) => show(Mark::Fail, "report: the server does not accept this token"),
         Ok((status, body)) => {
             show(Mark::Fail, &format!("report: the server answered {status}: {body}"))
         }
         Err(e) => show(Mark::Fail, &format!("report: {e}")),
-    };
-    Ok(u8::from(failed))
-}
-
-/// The outbox can be created and written to, as the user running this.
-fn writable(state: &Path) -> anyhow::Result<()> {
-    Outbox::open(state)?;
-    let probe = state.join("outbox/doctor.tmp");
-    std::fs::write(&probe, b"").with_context(|| format!("cannot write {}", probe.display()))?;
-    Ok(std::fs::remove_file(&probe)?)
+    })
 }

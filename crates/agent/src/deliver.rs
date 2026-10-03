@@ -35,12 +35,17 @@ pub type Answer = Result<(u16, String), String>;
 
 impl Client {
     pub fn new(server: &str, token: String) -> anyhow::Result<Self> {
+        install_tls();
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))
             .user_agent(concat!("skym/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Client { http, server: server.trim_end_matches('/').to_string(), token })
+    }
+
+    pub fn server(&self) -> &str {
+        &self.server
     }
 
     /// One gzip-compressed report.
@@ -64,6 +69,16 @@ async fn answer(request: reqwest::RequestBuilder) -> Answer {
     let response = request.send().await.map_err(|e| chain(&e))?;
     let status = response.status().as_u16();
     Ok((status, response.text().await.unwrap_or_else(|e| format!("(no body: {e})"))))
+}
+
+/// ring is the build's only TLS provider; installed once, before the first client.
+fn install_tls() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if rustls::crypto::ring::default_provider().install_default().is_err() {
+            eprintln!("warning: a TLS provider was already installed");
+        }
+    });
 }
 
 /// reqwest keeps the cause (refused, timed out, bad certificate) in the source chain.

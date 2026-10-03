@@ -33,6 +33,9 @@ flate2 = "1"
 
 [dev-dependencies]
 skym-core = { path = "../core", features = ["fixtures"] }
+# A real server for the agent's end-to-end tests; never a dependency of the binary.
+skym-server = { path = "../server" }
+axum = "0.8"
 
 [lints]
 workspace = true

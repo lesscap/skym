@@ -70,10 +70,6 @@ enum Command {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    // The only TLS provider in the build; installing it cannot conflict.
-    if rustls::crypto::ring::default_provider().install_default().is_err() {
-        eprintln!("warning: a TLS provider was already installed");
-    }
     let result = match config::load(cli.config.as_deref()) {
         Err(e) => Err(e),
         Ok(cfg) => match cli.command {

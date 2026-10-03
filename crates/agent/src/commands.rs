@@ -1,6 +1,6 @@
 //! Local commands. None of them use the network beyond the Docker socket and datastore probes.
 
-use crate::collect::{Collected, Window, collect, host};
+use crate::collect;
 use crate::config::Config;
 use crate::exceptions::Detail;
 use crate::{report, status};
@@ -12,28 +12,10 @@ use skym_core::time::parse_since;
 use skym_core::view::{HostView, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One collection pass: events from the last hour, logs after `logs_after`.
-/// Collection errors go to stderr.
-pub async fn pass(
-    cfg: &Config,
-    now: Timestamp,
-    logs_after: Timestamp,
-    detail: Detail,
-) -> (String, Collected) {
-    let host = host::hostname();
-    let events_since = now - SignedDuration::from_hours(1);
-    let cursors = BTreeMap::new();
-    let window = Window { now, events_since, logs_after, cursors: &cursors, detail };
-    let collected = collect(cfg, &host, &window).await;
-    for e in &collected.errors {
-        eprintln!("error: {e}");
-    }
-    (host, collected)
-}
-
 pub async fn status(cfg: &Config, json: bool) -> anyhow::Result<u8> {
     let now = Timestamp::now();
-    let (host, c) = pass(cfg, now, now - SignedDuration::from_mins(15), Detail::Report).await;
+    let (host, c) =
+        collect::once(cfg, now, now - SignedDuration::from_mins(15), Detail::Report).await;
     let report = report::build(&c, &host, now);
     if let Err(e) = validate(&report) {
         eprintln!("error: invalid report: {e}");
@@ -63,7 +45,7 @@ pub async fn exceptions(
     json: bool,
 ) -> anyhow::Result<u8> {
     let now = Timestamp::now();
-    let (_, c) = pass(cfg, now, parse_since(since, now)?, Detail::Local).await;
+    let (_, c) = collect::once(cfg, now, parse_since(since, now)?, Detail::Local).await;
     let wanted = |g: &&ExceptionGroup| {
         workload.is_none_or(|w| format!("{}/{}", g.workload.project, g.workload.service) == w)
     };
@@ -102,7 +84,7 @@ fn indent(s: &str) -> String {
 
 pub async fn report_dry_run(cfg: &Config) -> anyhow::Result<u8> {
     let now = Timestamp::now();
-    let (host, c) = pass(cfg, now, now - cfg.interval, Detail::Report).await;
+    let (host, c) = collect::once(cfg, now, now - cfg.interval, Detail::Report).await;
     println!("{}", serde_json::to_string_pretty(&report::build(&c, &host, now))?);
     Ok(status::exit_code(Status::Ok, !c.errors.is_empty(), c.all_failed))
 }

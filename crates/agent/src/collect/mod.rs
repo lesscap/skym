@@ -120,6 +120,23 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window<'_>) -> Collected {
     }
 }
 
+/// One pass for a local command: events from the last hour, logs after `logs_after`, no
+/// cursors. Collection errors go to stderr. Returns the hostname used.
+pub async fn once(
+    cfg: &Config,
+    now: Timestamp,
+    logs_after: Timestamp,
+    detail: Detail,
+) -> (String, Collected) {
+    let host = host::hostname();
+    let events_since = now - jiff::SignedDuration::from_hours(1);
+    let cursors = BTreeMap::new();
+    let window = Window { now, events_since, logs_after, cursors: &cursors, detail };
+    let collected = collect(cfg, &host, &window).await;
+    collected.errors.iter().for_each(|e| eprintln!("error: {e}"));
+    (host, collected)
+}
+
 /// The value, or `None` with the failure recorded.
 fn note<T>(errors: &mut Vec<String>, source: &str, result: anyhow::Result<T>) -> Option<T> {
     result.map_err(|e| errors.push(format!("{source}: {e:#}"))).ok()

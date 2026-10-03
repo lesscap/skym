@@ -1,11 +1,12 @@
 //! Background work: heartbeat evaluation and daily maintenance.
 
-use crate::api::AppState;
+use crate::config::ServerConfig;
 use crate::evaluate::heartbeat_once;
 use crate::lifecycle;
-use crate::store::{history, hosts, incidents};
+use crate::store::{Store, history, hosts, incidents};
 use jiff::{SignedDuration, Timestamp};
 use skym_core::subject::Subject;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// A quarter of the report interval, between 1 and 15 seconds.
@@ -14,17 +15,17 @@ pub fn heartbeat_period(report_interval: SignedDuration) -> Duration {
     Duration::from_secs(quarter.clamp(1, 15) as u64)
 }
 
-pub fn spawn(state: AppState) {
-    let beat = state.clone();
+pub fn spawn(store: Store, cfg: Arc<ServerConfig>, started: Timestamp) {
+    let beat = store.clone();
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(heartbeat_period(beat.cfg.report_interval));
+        let mut tick = tokio::time::interval(heartbeat_period(cfg.report_interval));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let configured: Vec<String> = cfg.hosts.iter().map(|h| h.id.clone()).collect();
+        let interval = cfg.report_interval;
         loop {
             tick.tick().await;
-            let configured: Vec<String> = beat.cfg.hosts.iter().map(|h| h.id.clone()).collect();
-            let (started, interval) = (beat.started, beat.cfg.report_interval);
+            let configured = configured.clone();
             let run = beat
-                .store
                 .call(move |c| heartbeat_once(c, &configured, started, interval, Timestamp::now()));
             if let Err(e) = run.await {
                 tracing::error!("heartbeat: {e:#}");
@@ -35,7 +36,7 @@ pub fn spawn(state: AppState) {
         let mut tick = tokio::time::interval(Duration::from_secs(24 * 3600));
         loop {
             tick.tick().await;
-            if let Err(e) = state.store.call(|c| maintain(c, Timestamp::now())).await {
+            if let Err(e) = store.call(|c| maintain(c, Timestamp::now())).await {
                 tracing::error!("maintenance: {e:#}");
             }
         }

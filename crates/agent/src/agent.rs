@@ -30,23 +30,8 @@ struct Agent<'a> {
 }
 
 pub async fn run(cfg: &Config) -> anyhow::Result<u8> {
-    let server = cfg.server.as_deref().context("`server` is not set in the configuration")?;
-    let client = Client::new(server, deliver::read_token(&cfg.token_file)?)?;
-    let cursors_path = cfg.state_dir.join("cursors.json");
-    let mut agent = Agent {
-        cfg,
-        host: host::hostname(),
-        client,
-        outbox: Outbox::open(&cfg.state_dir)?,
-        cursors: Cursors::load(&cursors_path).unwrap_or_else(|e| {
-            eprintln!("warning: {e:#}; logs are read from the last interval");
-            Cursors::default()
-        }),
-        cursors_path,
-        memory: Memory::default(),
-        facts: FactsPolicy::default(),
-        last_read: None,
-    };
+    let mut agent = Agent::new(cfg)?;
+    let server = agent.client.server();
     let mut ticks = tokio::time::interval(cfg.interval.unsigned_abs());
     ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let (mut term, mut int) = (signal(SignalKind::terminate())?, signal(SignalKind::interrupt())?);
@@ -66,7 +51,27 @@ pub async fn run(cfg: &Config) -> anyhow::Result<u8> {
     Ok(0)
 }
 
-impl Agent<'_> {
+impl<'a> Agent<'a> {
+    fn new(cfg: &'a Config) -> anyhow::Result<Self> {
+        let server = cfg.server.as_deref().context("`server` is not set in the configuration")?;
+        let client = Client::new(server, deliver::read_token(&cfg.token_file)?)?;
+        let cursors_path = cfg.state_dir.join("cursors.json");
+        Ok(Agent {
+            cfg,
+            host: host::hostname(),
+            client,
+            outbox: Outbox::open(&cfg.state_dir)?,
+            cursors: Cursors::load(&cursors_path).unwrap_or_else(|e| {
+                eprintln!("warning: {e:#}; logs are read from the last interval");
+                Cursors::default()
+            }),
+            cursors_path,
+            memory: Memory::default(),
+            facts: FactsPolicy::default(),
+            last_read: None,
+        })
+    }
+
     /// Collect, store, then send. The pass's log lines count as read once its report is
     /// stored (or, when storing fails, delivered): a crash in between reads them again
     /// rather than losing them.
@@ -180,3 +185,7 @@ impl Agent<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "agent_tests.rs"]
+mod tests;

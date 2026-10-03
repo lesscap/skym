@@ -8,6 +8,13 @@ exclude_re = [
     "logs.rs.*(in|replace) read(_one|_tail)?\\b",
     # Background loops of the server; what they call (heartbeat_once, maintain) is tested.
     "tasks.rs.*\\bspawn\\b",
+    # The agent's tick loop and signals; each pass is tested against a real server.
+    "agent.rs.*(in|replace) run\\b",
+    # Not covered by the tests, which run without Docker (no log lines) and, on macOS, without
+    # /proc (no facts): the facts reset after an unsent report and the fallback log start.
+    "agent.rs.*(delete ! in|replace - with \\+ in) Agent<'a>::pass",
+    # Message wording: the "waiting" count.
+    "agent.rs.*replace - with \\+ in Agent<'a>::flush",
     "systemd.rs.* in collect\\b",
     # Equivalent: the rank ends with the container id, so `>` and `>=` differ only for the same container.
     "containers.rs.*replace > with >= in winners",
@@ -22,8 +29,7 @@ exclude_globs = [
     "crates/agent/src/commands.rs",
     "crates/agent/src/collect/mod.rs",
     "crates/agent/src/collect/docker.rs",
-    # The agent loop, HTTP delivery and doctor's checks: verified end to end against a server.
-    "crates/agent/src/agent.rs",
+    # HTTP delivery and doctor's checks: verified end to end against a server.
     "crates/agent/src/deliver.rs",
     "crates/agent/src/doctor.rs",
 ]
