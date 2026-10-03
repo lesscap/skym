@@ -73,7 +73,9 @@ pub fn projection(
     if !slope.is_finite() || slope <= 0.0 {
         return None;
     }
-    let full_in = SignedDuration::from_secs_f64(total.saturating_sub(last.1) as f64 / slope);
+    // A nearly flat disk projects beyond what a duration holds: far beyond a week, so none.
+    let full_in =
+        SignedDuration::try_from_secs_f64(total.saturating_sub(last.1) as f64 / slope).ok()?;
     let (week, day) = (SignedDuration::from_hours(24 * 7), SignedDuration::from_hours(24));
     let matched = if open { full_in <= week } else { full_in < week };
     matched.then(|| (if full_in < day { Severity::Critical } else { Severity::Warn }, full_in))
@@ -241,6 +243,16 @@ mod tests {
         assert_eq!(p(30, 600), None, "30 samples under 5h");
         assert!(p(31, 600).is_some(), "exactly 5h");
         assert_eq!(projection(&growing(40, 600, 0), 100_000_000, false), None, "flat disk");
+    }
+
+    #[test]
+    fn a_nearly_flat_disk_projects_nothing_instead_of_overflowing() {
+        // One byte more over eight hours on a huge disk: full in ~10^23 seconds.
+        let mut samples: Vec<(Timestamp, u64)> =
+            (0..40).map(|i| (at(i * 720), 1_000_000)).collect();
+        samples.last_mut().unwrap().1 += 1;
+        assert_eq!(projection(&samples, u64::MAX, false), None);
+        assert_eq!(projection(&samples, u64::MAX, true), None);
     }
 
     #[test]
