@@ -1,10 +1,11 @@
 //! HTTP: `POST /api/report` for hosts, read-only `GET /api/*` for readers.
 //! A host token can only report; a reader token can only read.
 
+pub mod apps;
 mod handlers;
 pub mod views;
 
-use crate::config::{ServerConfig, sha256_hex};
+use crate::config::{Endpoint, ServerConfig, sha256_hex};
 use crate::store::Store;
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -27,6 +28,8 @@ pub struct AppState {
     pub hosts: Arc<HashMap<String, HostId>>,
     pub readers: Arc<HashMap<String, String>>,
     pub started: Timestamp,
+    /// Every URL probed (`ServerConfig::probed`), worked out once.
+    pub probed: Arc<Vec<Endpoint>>,
 }
 
 impl AppState {
@@ -36,6 +39,7 @@ impl AppState {
             cfg.readers.iter().map(|r| (r.token_sha256.clone(), r.name.clone())).collect();
         AppState {
             store,
+            probed: Arc::new(cfg.probed()),
             cfg: Arc::new(cfg),
             hosts: Arc::new(hosts),
             readers: Arc::new(readers),
@@ -60,6 +64,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/timeline", get(handlers::timeline))
         .route("/api/incidents", get(handlers::incidents))
         .route("/api/exceptions", get(handlers::exceptions))
+        .route("/api/apps", get(handlers::apps))
+        .route("/api/apps/{host}/{project}", get(handlers::app))
+        .route("/api/apps/{host}/{project}/{service}", get(handlers::lone_app))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_reader));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))

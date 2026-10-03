@@ -46,14 +46,28 @@ struct WorkloadKey {
 
 struct Endpoint {                // configured on the server, probed from it
     url: Url,
-    customer: CustomerId,
+    customer: CustomerId,        // an application's probe: its host's customer
+    app: Option<AppKey>,
+}
+
+struct App {                     // discovered from workloads; described in the configuration
+    key: AppKey,
+    name: String, env: Option<String>, note: Option<String>,
+}
+
+struct AppKey {
+    host: HostId,
+    project: String,             // the compose project, or "-" / "_systemd"
+    service: Option<String>,     // set only for "-" and "_systemd": each such workload is its own app
 }
 ```
 
 ```text
 Customer 1─* Host 1─* Workload 1─* ExceptionGroup
 Customer 1─* Endpoint
-Incident.subject ∈ Host ∪ Workload ∪ Mount ∪ Endpoint
+Host 1─* App 1─* Workload        app(w) = (w.host, w.project, w.service if w.project ∈ {"-", "_systemd"})
+App 1─* Endpoint
+Incident.subject ∈ Host ∪ Workload ∪ Mount ∪ Endpoint ∪ App
 Event.subject    ∈ Host ∪ Workload
 ```
 
@@ -66,7 +80,10 @@ host:<host>                          host:web-1
 workload:<host>/<project>/<service>  workload:web-1/shop/search
 mount:<host>:<path>                  mount:web-1:/data
 endpoint:<url>                       endpoint:https://shop.example.com
+app:<host>/<project>[/<service>]     app:web-1/shop, app:web-1/-/redis
 ```
+
+Readers of the API keep a subject of a kind they do not know as it is; the configuration and the store reject it.
 
 ### Workload identity
 
@@ -167,6 +184,7 @@ now − host.last_seen > 3 × report_interval ⇒ open Incident { subject: host,
 | `ENDPOINT_DOWN` | Endpoint | No answer, or an unexpected status, from the server's probe |
 | `CERT_EXPIRING` | Endpoint | TLS certificate expires soon (read from the probe's handshake) |
 | `APP_EXCEPTIONS` | Workload | Application-class exception groups above a threshold |
+| `APP_MISSING` | App | A configured container application of which the host lists no container |
 
 Thresholds, open/resolve rules and muting are defined in [judgement rules](judgement.md).
 

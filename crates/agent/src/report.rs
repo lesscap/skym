@@ -31,6 +31,7 @@ pub fn build(c: &Collected, host: &str, now: Timestamp) -> Report {
         local_events: c.local_events.clone(),
         exceptions: c.exceptions.clone(),
         errors: c.errors.clone(),
+        containers_listed: c.containers_listed,
     }
 }
 
@@ -75,6 +76,10 @@ mod tests {
                 .all(|w| w.facts.as_ref().map(facts_hash) == Some(w.facts_hash.clone()))
         );
         assert_eq!(r.host_state.transient_containers, TransientCounts { running: 2, exited: 5 });
+        assert!(!r.containers_listed);
+        let listed = Collected { containers_listed: true, ..collected() };
+        let at = Timestamp::from_second(1_790_000_000).unwrap();
+        assert!(build(&listed, "x", at).containers_listed, "the server may call a container gone");
     }
 
     #[test]

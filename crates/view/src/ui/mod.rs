@@ -1,5 +1,6 @@
 //! Drawing. Every frame is drawn from the state alone; nothing here changes it.
 
+mod apps;
 mod host;
 mod overview;
 mod timeline;
@@ -73,6 +74,8 @@ pub fn draw(f: &mut Frame, app: &App, server: &str, now: Timestamp, theme: Theme
         Screen::Workload(_) => workload::draw(f, body, app, now, theme),
         Screen::Exceptions(h) => workload::exceptions(f, body, app, h, now, theme),
         Screen::Timeline { .. } => timeline::draw(f, body, app, theme),
+        Screen::Apps => apps::list(f, body, app, now, theme),
+        Screen::App(_) => apps::one(f, body, app, now, theme),
     }
     f.render_widget(bottom_bar(app, theme), bottom);
     if app.help {
@@ -132,8 +135,10 @@ fn bottom_bar(app: &App, theme: Theme) -> Paragraph<'static> {
     }
     let keys = match &app.frame().screen {
         Screen::Overview => {
-            "↑↓ move  ⏎ open  ⇥ pane  / filter  h hygiene  m muted  r refresh  ? help  q quit"
+            "↑↓ move  ⏎ open  ⇥ pane  a apps  / filter  h hygiene  m muted  r refresh  ? help  q quit"
         }
+        Screen::Apps => "↑↓ move  ⏎ open  e all environments  / filter  esc back  ? help",
+        Screen::App(_) => "↑↓ move  ⏎ service  / filter  esc back  ? help",
         Screen::Host(_) => {
             "↑↓ move  ⏎ service  t timeline  e exceptions  / filter  esc back  ? help"
         }
@@ -151,8 +156,9 @@ fn help(f: &mut Frame, theme: Theme) {
         "esc ⌫      back (or clear the filter)",
         "⇥          switch pane (overview)",
         "/          filter by name",
+        "a          applications",
         "t          timeline (host, service)",
-        "e          exceptions (host)",
+        "e          exceptions (host); all environments (applications)",
         "[ ]        timeline window: 6h 24h 7d",
         "h          show hygiene (info) problems",
         "m          show muted problems",
