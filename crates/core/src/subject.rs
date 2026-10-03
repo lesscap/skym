@@ -38,6 +38,9 @@ pub struct AppKey {
     pub service: Option<String>,
 }
 
+/// The host of applications that run elsewhere and are only probed (a third-party service).
+pub const EXTERNAL: &str = "external";
+
 /// Percent-encodes all but unreserved characters (a replica is `api#2`), for one segment
 /// or value of an API URL.
 pub fn encode(segment: &str) -> String {
@@ -58,6 +61,11 @@ fn lone(project: &str) -> bool {
 }
 
 impl AppKey {
+    /// Runs on no host skym watches: only its URLs are probed.
+    pub fn is_external(&self) -> bool {
+        self.host == EXTERNAL
+    }
+
     /// A systemd unit: declared in the agent's configuration, so its absence is `WORKLOAD_DOWN`.
     pub fn is_unit(&self) -> bool {
         self.project == "_systemd"

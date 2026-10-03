@@ -27,6 +27,8 @@ fn incident(subject: &str, code: IncidentCode, severity: Severity) -> IncidentVi
         muted: false,
         mute_reason: None,
         links: BTreeMap::new(),
+        app: None,
+        observed_since: None,
     }
 }
 
@@ -155,4 +157,20 @@ fn a_silent_host_takes_its_apps_with_it() {
         [("shop", Status::Critical), ("blog", Status::Ok)],
         "other host problems stay the host's"
     );
+}
+
+#[test]
+fn an_external_app_is_known_by_its_urls() {
+    let mut partner = configured("external/partner", Some("Partner"));
+    partner.probes = vec![];
+    let answering =
+        EndpointOverview { status: Status::Ok, ..probe("https://p.example/", "external/partner") };
+    let apps = summaries(&[], std::slice::from_ref(&partner), &[answering], &[], &BTreeMap::new());
+    assert_eq!((apps[0].status, apps[0].services), (Status::Ok, 0), "no services, yet fine");
+    let unprobed = EndpointOverview {
+        status: Status::Unknown,
+        ..probe("https://p.example/", "external/partner")
+    };
+    let apps = summaries(&[], &[partner], &[unprobed], &[], &BTreeMap::new());
+    assert_eq!(apps[0].status, Status::Unknown, "not probed yet");
 }

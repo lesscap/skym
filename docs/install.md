@@ -44,16 +44,18 @@ name = "Shop"
 env = "prod"                      # any text; prod, pre and test sort first
 note = "The web shop; its test copy is web-1/shop-test"
 
-[[apps.probes]]                   # the application's URLs, probed like [[endpoints]]
+[[apps.probes]]                   # the application's URLs (see Probes below)
 url = "https://shop.example.com/healthz"
 headers = { Authorization = "Bearer <probe token>" }
 ```
 
 A listed container application that disappears from its host opens `APP_MISSING`: list what should be running, leave out what may come and go. systemd units can be listed too, for their name, note and probes; an absent unit is already `WORKLOAD_DOWN`. `APP_MISSING` needs agents that report complete container listings (this version or later). A container outside compose is only tracked with a restart policy (`always`, `unless-stopped` or `on-failure`); without one it is short-lived to skym, so do not list it.
 
-### Endpoints
+A service that runs where skym does not watch (a third-party API, say) can be listed for its URLs alone, as `id = "external/<name>"` with at least one probe; it is never missing.
 
-`[[endpoints]]` in the configuration lists URLs that belong to no application, which the server probes from its own host, once per report interval: whether they answer, and when their certificates expire. See the examples in [`deploy/server.example.toml`](../deploy/server.example.toml) and the [judgement rules](judgement.md).
+### Probes
+
+The server probes every `[[apps.probes]]` URL from its own host, once per report interval: whether it answers (by default with a status below 400, else one in `expect`), and when its certificate expires. Every URL belongs to an application, so its problems show as that application's. See the examples in [`deploy/server.example.toml`](../deploy/server.example.toml) and the [judgement rules](judgement.md). (Standalone `[[endpoints]]` and `[[customers]]` from earlier versions: move each URL under its application's probes; `customers` and a host's `customer` are ignored.)
 
 For an application you run, a URL made for probing tells more than its home page:
 
@@ -98,7 +100,7 @@ skym-view --server https://skym.example.com
 
 ## Upgrading
 
-Install the new `skym-view` first, then the server, then the agents. Newer servers may send subjects and fields older views do not know; newer agents may send fields older servers ignore.
+Upgrade the server first, then `skym-view`, then the agents. An older view still reads a newer server (it ignores what it does not know); a view newer than its server says so in its top bar instead of showing an empty list. Newer agents may send fields older servers ignore.
 
 Going back to an older server: a server older than applications cannot read the `app:` incidents a newer one stored, and stops taking reports from those hosts. Stop the server, remove them with their history, then start the older one:
 

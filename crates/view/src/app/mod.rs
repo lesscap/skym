@@ -36,8 +36,12 @@ pub enum Msg {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Screen {
-    Overview,
+    /// The tabs: one of them is always the root of the stack.
+    Problems,
+    Apps,
+    Hosts,
     Host(HostId),
+    App(AppKey),
     Workload(WorkloadKey),
     Exceptions(HostId),
     /// `window` indexes `WINDOWS`.
@@ -46,14 +50,15 @@ pub enum Screen {
         workload: Option<WorkloadKey>,
         window: usize,
     },
-    Apps,
-    App(AppKey),
 }
+
+/// The tabs, in the order `⇥` visits them.
+pub const TABS: [Screen; 3] = [Screen::Problems, Screen::Apps, Screen::Hosts];
 
 impl Screen {
     fn request(&self) -> Option<Request> {
         match self {
-            Screen::Overview => None,
+            Screen::Problems | Screen::Hosts => None, // both come with the overview
             Screen::Host(h) => Some(Request::Host(h.clone())),
             Screen::Workload(k) => Some(Request::Workload(k.clone())),
             Screen::Exceptions(h) => Some(Request::Exceptions(h.clone())),
@@ -66,12 +71,6 @@ impl Screen {
             Screen::App(a) => Some(Request::App(a.clone())),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pane {
-    Hosts,
-    Problems,
 }
 
 /// The last good answer and when it came.
@@ -113,9 +112,6 @@ pub struct App {
     pub timeline: Data<Timeline>,
     pub apps: Data<AppList>,
     pub app: Data<AppView>,
-    pub pane: Pane,
-    /// 0 is "All hosts", then `targets()` in order.
-    pub host_cursor: usize,
     pub filter: Option<String>,
     pub editing: bool,
     pub show_info: bool,
@@ -134,7 +130,7 @@ pub struct App {
 impl Default for App {
     fn default() -> Self {
         App {
-            stack: vec![Frame { screen: Screen::Overview, cursor: 0, expanded: None }],
+            stack: vec![Frame { screen: Screen::Problems, cursor: 0, expanded: None }],
             overview: Data::default(),
             muted: Data::default(),
             host: Data::default(),
@@ -143,8 +139,6 @@ impl Default for App {
             timeline: Data::default(),
             apps: Data::default(),
             app: Data::default(),
-            pane: Pane::Hosts,
-            host_cursor: 0,
             filter: None,
             editing: false,
             show_info: false,
@@ -161,17 +155,24 @@ impl Default for App {
 
 impl App {
     pub fn frame(&self) -> &Frame {
-        self.stack.last().expect("the overview is never popped")
+        self.stack.last().expect("a tab is never popped")
     }
 
     fn frame_mut(&mut self) -> &mut Frame {
-        self.stack.last_mut().expect("the overview is never popped")
+        self.stack.last_mut().expect("a tab is never popped")
     }
 
+    /// The tab in view: the root of the stack.
+    pub fn tab(&self) -> &Screen {
+        &self.stack[0].screen
+    }
+
+    /// The overview and the applications (problems are named by them), and the screen.
     fn refresh(&mut self, now: Timestamp) -> Vec<Request> {
         self.last_refresh = Some(now);
         let muted = self.show_muted.then_some(Request::Muted);
-        [Some(Request::Overview), muted, self.frame().screen.request()]
+        let screen = self.frame().screen.request().filter(|r| *r != Request::Apps);
+        [Some(Request::Overview), Some(Request::Apps), muted, screen]
             .into_iter()
             .flatten()
             .collect()
@@ -189,8 +190,7 @@ impl App {
             return;
         }
         // An answer for a screen no longer in view is dropped, failures included.
-        let wanted = request == Request::Overview
-            || request == Request::Muted
+        let wanted = matches!(request, Request::Overview | Request::Apps | Request::Muted)
             || self.frame().screen.request().as_ref() == Some(&request);
         if !wanted {
             return;
@@ -201,10 +201,7 @@ impl App {
         };
         self.error = None;
         match *payload {
-            Payload::Overview(v) => {
-                self.overview.set(v, now);
-                self.clamp_host_cursor();
-            }
+            Payload::Overview(v) => self.overview.set(v, now),
             Payload::Muted(v) => self.muted.set(v, now),
             Payload::Host(v) => self.host.set(v, now),
             Payload::Workload(v) => self.workload.set(v, now),

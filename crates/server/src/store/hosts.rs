@@ -2,15 +2,14 @@
 
 use super::{from_json, json, parsed, ts};
 use crate::diff::Stored;
-use crate::lifecycle::Incident;
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, params};
 use skym_core::model::{HostFacts, HostState, MountState, WorkloadFacts, WorkloadState};
 use skym_core::report::{Report, WorkloadReport};
-use skym_core::rules::IncidentCode;
-use skym_core::subject::{HostId, Subject, WorkloadKey};
+use skym_core::subject::{HostId, WorkloadKey};
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub struct HostRow {
     pub id: HostId,
     pub facts: Option<HostFacts>,
@@ -22,6 +21,7 @@ pub struct HostRow {
     pub first_seen: Timestamp,
 }
 
+#[derive(Clone)]
 pub struct WorkloadRow {
     pub key: WorkloadKey,
     pub facts: Option<WorkloadFacts>,
@@ -197,26 +197,4 @@ pub fn prune_archived(c: &Connection, before: Timestamp) -> rusqlite::Result<usi
 
 pub fn prune_disk_samples(c: &Connection, before: Timestamp) -> rusqlite::Result<usize> {
     c.execute("DELETE FROM disk_samples WHERE ts < ?1", [ts(before)])
-}
-
-/// When each stopped workload among these incidents stopped, if its state says so.
-pub fn stopped_since(
-    c: &Connection,
-    open: &[Incident],
-) -> rusqlite::Result<BTreeMap<WorkloadKey, Timestamp>> {
-    let mut stmt = c.prepare(
-        "SELECT state_json FROM workloads WHERE host = ?1 AND project = ?2 AND service = ?3",
-    )?;
-    let mut stopped = BTreeMap::new();
-    for i in open {
-        if let (IncidentCode::WorkloadDown, Subject::Workload(k)) = (i.code, &i.subject) {
-            let state: Option<String> =
-                stmt.query_row(params![k.host, k.project, k.service], |r| r.get(0)).optional()?;
-            let state = state.map(|s| from_json::<WorkloadState>(&s)).transpose()?;
-            if let Some(t) = state.as_ref().and_then(WorkloadState::stopped_since) {
-                stopped.insert(k.clone(), t);
-            }
-        }
-    }
-    Ok(stopped)
 }

@@ -17,7 +17,7 @@ The API `skym-server` offers to AI agents and to `skym-view`. It is read-only. R
 Authorization: Bearer <reader token>
 ```
 
-Reader tokens are configured on the server. Every reader token sees all customers; there are several so that each person or agent has its own, can be told apart in the server log, and can be revoked alone.
+Reader tokens are configured on the server. Every reader token sees everything; there are several so that each person or agent has its own, can be told apart in the server log, and can be revoked alone.
 
 ```toml
 [[readers]]
@@ -36,10 +36,11 @@ token_sha256 = "…"
 | Endpoint | Question | Returns |
 | --- | --- | --- |
 | `GET /api` | How do I use this? | Endpoint descriptions |
-| `GET /api/overview` | Where is something wrong right now? | Customers → hosts with status, last report age and open, unmuted incidents; unhealthy hosts first |
+| `GET /api/overview` | Where is something wrong right now? | `problems`: every open, unmuted incident, worst and oldest first, each with its application (`app`, else it is its host's own); `hosts`: every host with its status, last report age, load, memory, disks and applications, most urgent first |
 | `GET /api/apps` | Which applications exist, where, and are they up? | Every application (compose project, or lone container or systemd unit) with its name, environment, note, status, services, URLs, last deployment and open incidents; most urgent first |
 | `GET /api/apps/{host}/{project}` | What is this application, and how is it? | The application and its workloads; lone containers and systemd units at `/api/apps/{host}/{project}/{service}` |
-| `GET /api/hosts/{host}` | What is going on with this host? | Facts, state, workloads with their status, open incidents |
+| `GET /api/hosts` | Which hosts are there, and how loaded? | The overview's `hosts` |
+| `GET /api/hosts/{host}` | What is going on with this host? | Facts, state, its applications, workloads with their status, open incidents |
 | `GET /api/hosts/{host}/workloads/{project}/{service}` | What is going on with this application? | Facts, state, recent exception groups, recent events |
 | `GET /api/timeline` | When did it start, and what else happened? | Incident changes and events, merged and sorted by time |
 | `GET /api/incidents` | Incident history | Incidents |
@@ -48,7 +49,17 @@ token_sha256 = "…"
 
 `{project}` is `-` for containers outside compose. Compose project names cannot be `-`, so there is no collision.
 
-Applications are discovered from the workloads hosts report; the configuration may describe them (`name`, `env`, `note`) and give them URLs to probe. A configured container application of which its host lists no container opens `APP_MISSING`. Follow an incident's or workload's `links.app` to its application.
+Applications are discovered from the workloads hosts report; the configuration may describe them (`name`, `env`, `note`) and give them URLs to probe. Every probed URL belongs to an application; one that runs where skym does not watch is an external application, `external/<name>`. A configured container application of which its host lists no container opens `APP_MISSING`.
+
+Every incident says what it belongs to, which is where to look next:
+
+| Subject | `app` | Look at |
+| --- | --- | --- |
+| `workload:` | its application | the workload (`links.workload`) |
+| `endpoint:`, `app:` | its application | the application (`links.app`) |
+| `host:`, `mount:` | none: the host's own | the host (`links.host`) |
+
+`observed_since` on an incident is when skym started watching its subject (its host, or its URL's first probe): an incident opened about then may be older.
 
 ### Parameters
 
@@ -62,7 +73,7 @@ Applications are discovered from the workloads hosts report; the configuration m
 
 ### Status
 
-`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Only `warn` and `critical` incidents count; `info` incidents (hygiene) are listed, and counted in the overview's `info_count`. Hosts are listed by urgency: critical, then unknown, then warn, then ok; so are each customer's `endpoints`, which are `unknown` until first probed and when not probed for three report intervals. Muted incidents never count towards a status. `incidents` lists them only with `include_muted=true`; host and workload views include them with `muted: true`; the overview leaves them out and counts them in `muted_count`.
+`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Only `warn` and `critical` incidents count; `info` incidents (hygiene) are listed, and counted in the overview's `info_count`. Hosts are listed by urgency: critical, then unknown, then warn, then ok; so are applications. An application's URL is `unknown` until first probed and when not probed for three report intervals. Muted incidents never count towards a status. `incidents` lists them only with `include_muted=true`; host and workload views include them with `muted: true`; the overview leaves them out and counts them in `muted_count`.
 
 ### Lists and timeline
 
@@ -74,58 +85,56 @@ Applications are discovered from the workloads hosts report; the configuration m
 {
   "ts": "2026-10-01T06:30:00Z",
   "status": "critical",
-  "customers": [
+  "problems": [
     {
-      "id": "acme",
+      "code": "CRASH_LOOP",
+      "severity": "critical",
+      "subject": "workload:web-1/shop/search",
+      "app": "web-1/shop",
+      "opened_at": "2026-10-01T06:05:00Z",
+      "open_for": "25m",
+      "observed_since": "2026-09-01T08:00:00Z",
+      "detail": "12 restarts in the last hour",
+      "links": {
+        "app": "/api/apps/web-1/shop",
+        "workload": "/api/hosts/web-1/workloads/shop/search",
+        "timeline": "/api/timeline?host=web-1&workload=shop/search&since=6h"
+      }
+    },
+    {
+      "code": "DISK_FILLING",
+      "severity": "warn",
+      "subject": "mount:web-1:/data",
+      "app": null,
+      "opened_at": "2026-10-01T04:00:00Z",
+      "open_for": "2h30m",
+      "detail": "full in ~6d",
+      "links": { "host": "/api/hosts/web-1" }
+    }
+  ],
+  "hosts": [
+    {
+      "id": "web-1",
       "status": "critical",
-      "hosts": [
-        {
-          "id": "web-1",
-          "status": "critical",
-          "last_report_ago": "40s",
-          "observed_since": "2026-09-01T08:00:00Z",
-          "info_count": 0,
-          "incidents": [
-            {
-              "code": "CRASH_LOOP",
-              "severity": "critical",
-              "subject": "workload:web-1/shop/search",
-              "opened_at": "2026-10-01T06:05:00Z",
-              "open_for": "25m",
-              "detail": "12 restarts in the last hour",
-              "links": {
-                "workload": "/api/hosts/web-1/workloads/shop/search",
-                "timeline": "/api/timeline?host=web-1&workload=shop/search&since=6h"
-              }
-            }
-          ],
-          "links": { "host": "/api/hosts/web-1" }
-        },
-        {
-          "id": "web-2",
-          "status": "ok",
-          "last_report_ago": "12s",
-          "incidents": [],
-          "links": { "host": "/api/hosts/web-2" }
-        }
+      "last_report_ago": "40s",
+      "observed_since": "2026-09-01T08:00:00Z",
+      "load_1m": 1.3,
+      "memory_used_bytes": 9800000000,
+      "memory_total_bytes": 31000000000,
+      "disks": [
+        { "path": "/", "used_percent": 36, "filling": false },
+        { "path": "/data", "used_percent": 44, "filling": true }
       ],
-      "endpoints": [
-        {
-          "url": "https://shop.example.com/",
-          "status": "ok",
-          "last_probe_ago": "20s",
-          "observed_since": "2026-09-01T08:00:00Z",
-          "http_status": 200,
-          "latency_ms": 84,
-          "cert_expires_at": "2026-11-03T23:59:59Z",
-          "incidents": []
-        }
-      ]
+      "apps": 12,
+      "apps_in_trouble": 1,
+      "links": { "host": "/api/hosts/web-1" }
     }
   ],
   "muted_count": 2
 }
 ```
+
+`hosts` also carry each host's own open incidents (`incidents`, `info_count`). `customers`, the grouping older views read, is still sent for one version and will be removed; it lists hosts only, not applications' URLs.
 
 ## Errors
 

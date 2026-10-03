@@ -1,11 +1,12 @@
 use super::*;
 use crate::api::{Payload, Request};
-use crate::app::{Msg, update};
+use crate::app::{Frame, Msg, Screen, update};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use skym_core::rules::IncidentCode;
+use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{
-    AppList, AppSummary, CustomerOverview, EndpointOverview, HostOverview, IncidentView, Overview,
+    AppList, AppSummary, DiskUse, EndpointOverview, HostOverview, HostView, IncidentView, Overview,
 };
 use std::collections::BTreeMap;
 
@@ -13,9 +14,16 @@ fn t(min: i64) -> Timestamp {
     Timestamp::from_second(1_790_000_000 + min * 60).unwrap()
 }
 
+/// An open problem on a host skym watches since minute 0, attributed as the server does.
 fn incident(subject: &str, code: IncidentCode, severity: Severity, opened: i64) -> IncidentView {
+    let subject: Subject = subject.parse().unwrap();
     IncidentView {
-        subject: subject.parse().unwrap(),
+        app: match &subject {
+            Subject::Workload(k) => Some(AppKey::of(k)),
+            Subject::Endpoint(_) => Some("external/partner".parse().unwrap()),
+            _ => None,
+        },
+        subject,
         code,
         severity,
         detail: format!("{} detail", code.as_str()),
@@ -26,59 +34,62 @@ fn incident(subject: &str, code: IncidentCode, severity: Severity, opened: i64) 
         muted: false,
         mute_reason: None,
         links: BTreeMap::new(),
+        observed_since: Some(t(0)),
     }
 }
 
-/// The overview screen as text, 100 columns wide.
-fn screen(theme: Theme) -> Vec<String> {
-    overview_screen(theme, 100)
-}
-
-fn overview_screen(theme: Theme, width: u16) -> Vec<String> {
-    let host = HostOverview {
-        id: "x".into(),
-        status: Status::Critical,
+fn host(id: &str, status: Status, disks: Vec<DiskUse>) -> HostOverview {
+    HostOverview {
+        id: id.into(),
+        status,
         last_report_ago: Some("5s".into()),
         observed_since: Some(t(0)),
-        info_count: 1,
-        incidents: vec![
-            incident("workload:x/app/old", IncidentCode::WorkloadUnhealthy, Severity::Critical, 1),
-            incident("workload:x/app/fresh", IncidentCode::WorkloadDown, Severity::Critical, 100),
-            incident("host:x", IncidentCode::LogUnbounded, Severity::Info, 1),
-        ],
+        info_count: 0,
+        incidents: vec![],
         links: BTreeMap::new(),
-    };
-    let overview = Overview {
+        load_1m: Some(1.3),
+        memory_used_bytes: Some(9_800_000_000),
+        memory_total_bytes: Some(31_000_000_000),
+        disks,
+        apps: 23,
+        apps_in_trouble: 3,
+    }
+}
+
+fn overview() -> Overview {
+    Overview {
         ts: t(0),
         status: Status::Critical,
-        customers: vec![CustomerOverview {
-            id: "acme".into(),
-            name: "Acme".into(),
-            status: Status::Critical,
-            hosts: vec![host],
-            endpoints: vec![
-                endpoint(
-                    "https://shop.example.com/",
-                    None,
-                    vec![incident(
-                        "endpoint:https://shop.example.com/",
-                        IncidentCode::EndpointDown,
-                        Severity::Critical,
-                        110,
-                    )],
-                ),
-                endpoint("https://api.example.com/healthz", Some(1234), vec![]),
-            ],
-        }],
+        customers: vec![],
         muted_count: 0,
-    };
-    let mut app = App::default();
-    update(
-        &mut app,
-        Msg::Fetched(Request::Overview, Ok(Box::new(Payload::Overview(overview)))),
-        t(120),
-    );
-    render(&app, theme, width, 16)
+        problems: vec![
+            incident("workload:x/app/old", IncidentCode::WorkloadUnhealthy, Severity::Critical, 1),
+            incident("workload:x/app/fresh", IncidentCode::WorkloadDown, Severity::Critical, 100),
+            incident("mount:x:/data", IncidentCode::DiskFilling, Severity::Warn, 1),
+            incident(
+                "endpoint:https://partner.example.com/",
+                IncidentCode::EndpointDown,
+                Severity::Critical,
+                110,
+            ),
+            incident("host:x", IncidentCode::LogUnbounded, Severity::Info, 1),
+        ],
+        hosts: vec![
+            host(
+                "x",
+                Status::Critical,
+                vec![
+                    DiskUse { path: "/".into(), used_percent: 36, filling: false },
+                    DiskUse { path: "/data".into(), used_percent: 44, filling: true },
+                ],
+            ),
+            host(
+                "yi1",
+                Status::Ok,
+                vec![DiskUse { path: "/".into(), used_percent: 22, filling: false }],
+            ),
+        ],
+    }
 }
 
 fn endpoint(url: &str, latency_ms: Option<u64>, incidents: Vec<IncidentView>) -> EndpointOverview {
@@ -93,6 +104,21 @@ fn endpoint(url: &str, latency_ms: Option<u64>, incidents: Vec<IncidentView>) ->
         incidents,
         app: None,
     }
+}
+
+/// The problems tab, `width` columns wide.
+fn problems_screen(theme: Theme, width: u16) -> Vec<String> {
+    let mut app = App::default();
+    update(
+        &mut app,
+        Msg::Fetched(Request::Overview, Ok(Box::new(Payload::Overview(overview())))),
+        t(120),
+    );
+    render(&app, theme, width, 16)
+}
+
+fn screen(theme: Theme) -> Vec<String> {
+    problems_screen(theme, 100)
 }
 
 fn render(app: &App, theme: Theme, width: u16, height: u16) -> Vec<String> {
@@ -114,27 +140,124 @@ fn line_of(lines: &[String], text: &str) -> usize {
 #[test]
 fn new_problems_lead_and_hygiene_stays_folded() {
     let lines = screen(Theme { color: true });
-    assert!(line_of(&lines, "NEW") < line_of(&lines, " fresh "));
-    assert!(line_of(&lines, " fresh ") < line_of(&lines, "ONGOING"));
-    assert!(line_of(&lines, "ONGOING") < line_of(&lines, " old "));
-    assert!(lines[line_of(&lines, " old ")].contains("≥2h"), "found at the first look");
+    assert!(line_of(&lines, "NEW") < line_of(&lines, "fresh: "));
+    assert!(line_of(&lines, "fresh: ") < line_of(&lines, "ONGOING"));
+    assert!(line_of(&lines, "ONGOING") < line_of(&lines, "old: "));
+    assert!(lines[line_of(&lines, "old: ")].contains("≥2h"), "found at the first look");
     line_of(&lines, "1 hygiene items");
     assert!(!lines.iter().any(|l| l.contains("LOG_UNBOUNDED detail")), "folded");
 }
 
 #[test]
+fn every_problem_names_its_app_or_its_host() {
+    let lines = screen(Theme { color: false });
+    let fresh = &lines[line_of(&lines, "fresh: ")];
+    assert!(fresh.contains(" app ") && fresh.contains(" x "), "{fresh}");
+    let disk = &lines[line_of(&lines, "/data: ")];
+    assert!(disk.contains("host x"), "a host's own problem: {disk}");
+    let url = &lines[line_of(&lines, "partner.example.com: ENDPOINT_DOWN detail")];
+    assert!(url.contains(" partner ") && url.contains("external"), "{url}");
+    line_of(&lines, "[Problems]");
+}
+
+#[test]
 fn without_color_the_symbols_still_tell_the_status() {
     let lines = screen(Theme { color: false });
-    assert!(lines[line_of(&lines, " fresh ")].contains('✗'));
-    assert!(lines[line_of(&lines, " x ")].contains('✗'), "the host's status");
-    line_of(&lines, "2 critical");
+    assert!(lines[line_of(&lines, "fresh: ")].contains('✗'));
+    let top = &lines[0];
+    assert!(top.contains("✗ 3") && top.contains("! 1"), "problems by severity: {top}");
 }
 
 #[test]
 fn on_a_narrow_terminal_the_reason_still_shows() {
-    let lines = overview_screen(Theme { color: true }, 90);
-    let row = &lines[line_of(&lines, " fresh ")];
+    let lines = problems_screen(Theme { color: true }, 90);
+    let row = &lines[line_of(&lines, "fresh: ")];
     assert!(row.contains("WORKLOAD_DOWN detail"), "the whole reason fits: {row}");
+}
+
+#[test]
+fn on_a_very_narrow_terminal_the_sections_and_the_fold_still_read() {
+    let lines = problems_screen(Theme { color: true }, 70);
+    line_of(&lines, "ONGOING");
+    line_of(&lines, "fresh: ");
+    line_of(&lines, "hygiene items");
+}
+
+#[test]
+fn the_hosts_tab_shows_load_disks_and_apps() {
+    let mut app = App::default();
+    update(
+        &mut app,
+        Msg::Fetched(Request::Overview, Ok(Box::new(Payload::Overview(overview())))),
+        t(120),
+    );
+    let warn = |key: &str| AppSummary {
+        key: key.parse().unwrap(),
+        name: key.into(),
+        env: None,
+        note: None,
+        configured: false,
+        status: Status::Warn,
+        services: 1,
+        running: 1,
+        last_deployed: None,
+        endpoints: vec![],
+        incidents: vec![],
+        links: BTreeMap::new(),
+    };
+    let apps = AppList { apps: vec![warn("x/a"), warn("x/b")] };
+    update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(apps)))), t(120));
+    app.stack = vec![Frame { screen: Screen::Hosts, cursor: 0, expanded: None }];
+    let lines = render(&app, Theme { color: false }, 110, 12);
+    assert!(lines[line_of(&lines, " x ")].contains("(3 !)"), "marked by the worst app in trouble");
+    let x = &lines[line_of(&lines, " x ")];
+    assert!(x.contains("1.30") && x.contains("9.8 / 31.0 GB"), "{x}");
+    assert!(x.contains("/data 44% ▲") && x.contains("23"), "{x}");
+    assert!(line_of(&lines, " x ") < line_of(&lines, " yi1 "), "most urgent first");
+    line_of(&lines, "[Hosts]");
+}
+
+#[test]
+fn a_host_shows_its_own_problems_and_its_apps() {
+    let mut view: HostView =
+        serde_json::from_value(serde_json::json!({ "id": "x", "status": "critical" })).unwrap();
+    view.incidents = vec![
+        incident("mount:x:/data", IncidentCode::DiskFilling, Severity::Warn, 1),
+        incident("workload:x/app/fresh", IncidentCode::WorkloadDown, Severity::Critical, 100),
+    ];
+    let app_summary = |key: &str, env: &str, status| AppSummary {
+        key: key.parse().unwrap(),
+        name: key.rsplit('/').next().unwrap().into(),
+        env: Some(env.into()),
+        note: None,
+        configured: true,
+        status,
+        services: 2,
+        running: 2,
+        last_deployed: None,
+        endpoints: vec![],
+        incidents: vec![],
+        links: BTreeMap::new(),
+    };
+    view.apps = vec![
+        app_summary("x/app", "prod", Status::Critical),
+        app_summary("x/blog", "test", Status::Ok),
+    ];
+    let mut app = App::default();
+    app.stack.push(Frame { screen: Screen::Host("x".into()), cursor: 0, expanded: None });
+    update(
+        &mut app,
+        Msg::Fetched(Request::Host("x".into()), Ok(Box::new(Payload::Host(view)))),
+        t(120),
+    );
+    let lines = render(&app, Theme { color: false }, 100, 20);
+    line_of(&lines, "DISK_FILLING detail");
+    assert!(
+        !lines.iter().any(|l| l.contains("WORKLOAD_DOWN detail")),
+        "the app's problem is the app's"
+    );
+    let apps = line_of(&lines, "Apps (2)");
+    assert!(lines[line_of(&lines, " app ")].contains("prod") && line_of(&lines, " blog ") > apps);
 }
 
 /// A service screen with one exception group, its stack 40 lines long.
@@ -184,13 +307,6 @@ fn stderr_groups_count_no_failures_for_good() {
 }
 
 #[test]
-fn on_a_very_narrow_terminal_the_sections_and_the_fold_still_read() {
-    let lines = overview_screen(Theme { color: true }, 70);
-    line_of(&lines, "ONGOING");
-    line_of(&lines, " fresh ");
-}
-
-#[test]
 fn a_service_hides_its_muted_problems_unless_asked() {
     use crate::app::{Frame, Key, Screen};
     let key = skym_core::subject::WorkloadKey {
@@ -222,19 +338,6 @@ fn a_service_hides_its_muted_problems_unless_asked() {
 }
 
 #[test]
-fn endpoints_show_under_the_hosts_and_among_the_problems() {
-    let lines = screen(Theme { color: false });
-    let shop = line_of(&lines, "shop.examp…");
-    assert!(line_of(&lines, " x ") < shop, "after the customer's hosts");
-    assert!(lines[shop].contains('✗') && lines[shop].contains('—'), "down, no answer");
-    assert!(lines[line_of(&lines, "api.exampl…")].contains("1.2s"), "how fast it answered");
-    let problem = &lines[line_of(&lines, " endpoint ")];
-    assert!(problem.contains("shop.example.com") && problem.contains("ENDPOINT_DOWN detail"));
-    assert!(line_of(&lines, " endpoint ") < line_of(&lines, "ONGOING"), "a new problem");
-    line_of(&lines, "✗ 2 critical   ✓ 1 ok");
-}
-
-#[test]
 fn the_applications_page_groups_by_environment() {
     let app_summary = |key: &str, env: Option<&str>, status: Status, endpoints| AppSummary {
         key: key.parse().unwrap(),
@@ -263,7 +366,7 @@ fn the_applications_page_groups_by_environment() {
         ],
     };
     let mut app = App::default();
-    update(&mut app, Msg::Key(crate::app::Key::Char('a')), t(120));
+    update(&mut app, Msg::Key(crate::app::Key::Tab), t(120));
     update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(list)))), t(120));
     let lines = render(&app, Theme { color: false }, 100, 14);
     let shop = line_of(&lines, " shop ");
@@ -277,4 +380,17 @@ fn the_applications_page_groups_by_environment() {
     line_of(&lines, "1 more, all ok (e)");
     assert!(line_of(&lines, "UNCLASSIFIED") < line_of(&lines, " hbbs "));
     line_of(&lines, "Applications (3)");
+}
+
+#[test]
+fn a_server_older_than_the_view_is_named_not_shown_as_calm() {
+    let old: Overview = serde_json::from_value(serde_json::json!({
+        "ts": "2026-10-01T00:00:00Z", "status": "critical",
+        "customers": [{ "id": "acme", "name": "Acme", "status": "critical", "hosts": [] }]
+    }))
+    .unwrap();
+    let mut app = App::default();
+    update(&mut app, Msg::Fetched(Request::Overview, Ok(Box::new(Payload::Overview(old)))), t(120));
+    line_of(&render(&app, Theme { color: false }, 120, 8), "the server is older than this view");
+    assert!(!screen(Theme { color: false })[0].contains("older"), "not with a current server");
 }

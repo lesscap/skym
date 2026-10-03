@@ -3,6 +3,7 @@
 
 pub mod apps;
 mod handlers;
+mod snapshot;
 pub mod views;
 
 use crate::config::{Endpoint, ServerConfig, sha256_hex};
@@ -59,6 +60,7 @@ pub fn router(state: AppState) -> Router {
     let read = Router::new()
         .route("/api", get(handlers::index))
         .route("/api/overview", get(handlers::overview))
+        .route("/api/hosts", get(handlers::hosts))
         .route("/api/hosts/{host}", get(handlers::host))
         .route("/api/hosts/{host}/workloads/{project}/{service}", get(handlers::workload))
         .route("/api/timeline", get(handlers::timeline))

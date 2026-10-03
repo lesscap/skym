@@ -2,7 +2,7 @@
 
 use skym_core::report::Report;
 use skym_core::rules::{Finding, Severity};
-use skym_core::subject::Subject;
+use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{HostView, IncidentView, Status, rollup, workload_summary};
 use std::collections::BTreeMap;
 
@@ -27,11 +27,18 @@ pub fn host_view(report: &Report, mut findings: Vec<Finding>) -> HostView {
         workloads,
         incidents,
         errors: report.errors.clone(),
+        apps: Vec::new(), // the server's to tell
     }
 }
 
 fn incident(f: Finding) -> IncidentView {
     IncidentView {
+        app: match &f.subject {
+            Subject::Workload(k) => Some(AppKey::of(k)),
+            Subject::App(a) => Some(a.clone()),
+            _ => None,
+        },
+        observed_since: None,
         subject: f.subject,
         code: f.code,
         severity: f.severity,
@@ -164,5 +171,15 @@ mod tests {
         assert_eq!(exit_code(Status::Ok, true, false), 1);
         assert_eq!(exit_code(Status::Critical, true, false), 2);
         assert_eq!(exit_code(Status::Ok, true, true), 3);
+    }
+
+    #[test]
+    fn local_findings_name_their_application() {
+        let key = WorkloadKey { host: "x".into(), project: "shop".into(), service: "api".into() };
+        let app =
+            |s: Subject| incident(finding(s, IncidentCode::WorkloadDown, Severity::Critical)).app;
+        assert_eq!(app(Subject::Workload(key.clone())), Some(AppKey::of(&key)));
+        assert_eq!(app(Subject::App("x/shop".parse().unwrap())), Some("x/shop".parse().unwrap()));
+        assert_eq!(app(Subject::Host("x".into())), None);
     }
 }
