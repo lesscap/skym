@@ -9,6 +9,8 @@ pub fn full(subject: &Subject) -> String {
         Subject::Mount { path, .. } => path.clone(),
         Subject::Host(_) => "host".into(),
         Subject::Endpoint(url) => url.clone(),
+        Subject::App(a) => a.service.clone().unwrap_or_else(|| a.project.clone()),
+        Subject::Unknown(s) => s.clone(),
     }
 }
 

@@ -72,6 +72,8 @@ pub struct Collected {
     pub events_read: bool,
     /// Every container was listed and inspected: a workload missing here is gone.
     pub workloads_complete: bool,
+    /// Docker is enabled and listed every container (what the server needs to call one gone).
+    pub containers_listed: bool,
 }
 
 pub async fn collect(cfg: &Config, host: &str, w: &Window<'_>) -> Collected {
@@ -117,6 +119,7 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window<'_>) -> Collected {
         unit_restart_counts,
         events_read: out.events_read,
         workloads_complete: !cfg.docker.enabled || out.complete,
+        containers_listed: cfg.docker.enabled && out.complete,
     }
 }
 

@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use skym_core::model::{ExceptionClass, ExceptionGroup, LocalEvent, RunState};
 use skym_core::report::Report;
 use skym_core::rules::IncidentCode;
+use skym_server::config::AppConfig;
 use skym_server::evaluate::heartbeat_once;
 use skym_server::ingest::{IngestError, Outcome, ingest};
 use skym_server::lifecycle::{Change, State};
@@ -27,7 +28,16 @@ fn report(ts: Timestamp) -> Report {
 }
 
 fn send(c: &mut Connection, r: &Report, now: Timestamp) -> Result<Outcome, IngestError> {
-    ingest(c, "x", &serde_json::to_vec(r).unwrap(), now)
+    send_with(c, &[], r, now)
+}
+
+fn send_with(
+    c: &mut Connection,
+    apps: &[AppConfig],
+    r: &Report,
+    now: Timestamp,
+) -> Result<Outcome, IngestError> {
+    ingest(c, "x", apps, &serde_json::to_vec(r).unwrap(), now)
 }
 
 fn open_codes(c: &Connection) -> Vec<(String, IncidentCode)> {
@@ -321,4 +331,81 @@ fn a_failed_source_does_not_clear_unbounded_logs() {
     assert!(open_codes(&c).contains(&host_logs), "unknown, not recovered");
     send(&mut c, &report(t0() + mins(2)), t0() + mins(2)).unwrap();
     assert!(!open_codes(&c).contains(&host_logs), "every container bounded again");
+}
+
+fn app(id: &str, env: Option<&str>) -> AppConfig {
+    AppConfig {
+        id: id.parse().unwrap(),
+        name: None,
+        env: env.map(String::from),
+        note: None,
+        probes: vec![],
+    }
+}
+
+fn missing(c: &Connection) -> Vec<(String, State, skym_core::rules::Severity)> {
+    incidents::active_with_code(c, IncidentCode::AppMissing)
+        .unwrap()
+        .into_iter()
+        .map(|i| (i.subject.to_string(), i.state, i.severity))
+        .collect()
+}
+
+/// A report whose agent listed every container.
+fn listed(mut r: Report) -> Report {
+    r.containers_listed = true;
+    r
+}
+
+#[test]
+fn a_configured_app_with_nothing_running_goes_missing_and_comes_back() {
+    use skym_core::rules::Severity::{Critical, Warn};
+    let mut c = db::open_in_memory().unwrap();
+    let apps = [
+        app("x/captain", Some("prod")),
+        app("x/shop", Some("prod")),
+        app("x/old", None),
+        app("x/_systemd/nginx", Some("prod")),
+    ];
+    let at = |m| t0() + mins(m);
+    send_with(&mut c, &apps, &report(at(0)), at(0)).unwrap();
+    send_with(&mut c, &apps, &report(at(1)), at(1)).unwrap();
+    assert!(missing(&c).is_empty(), "an agent that does not say it listed everything");
+    send_with(&mut c, &apps, &listed(report(at(2))), at(2)).unwrap();
+    send_with(&mut c, &apps, &listed(report(at(3))), at(3)).unwrap();
+    assert_eq!(
+        missing(&c),
+        [("app:x/old".into(), State::Open, Warn), ("app:x/shop".into(), State::Open, Critical)],
+        "two complete listings without them; captain runs; a unit is never missing"
+    );
+
+    let mut hung = report(at(4)); // a container that did not answer `inspect` is left out
+    hung.workloads.retain(|w| w.key.project != "captain");
+    hung.errors = vec!["inspect 3f2a9c1d0b7e: Docker did not answer within 5s".into()];
+    send_with(&mut c, &apps, &hung, at(4)).unwrap();
+    send_with(&mut c, &apps, &hung, at(5)).unwrap();
+    assert_eq!(missing(&c).len(), 2, "captain is not missing, shop is not back");
+
+    let mut quiet = report(at(6)); // no errors, but no claim of a complete listing either
+    quiet.workloads.retain(|w| w.key.project != "captain");
+    send_with(&mut c, &apps, &quiet, at(6)).unwrap();
+    assert_eq!(missing(&c).len(), 2, "an older agent's report neither opens nor clears");
+
+    let mut back = listed(report(at(7)));
+    let mut shop = back.workloads[0].clone();
+    shop.key.project = "shop".into();
+    back.workloads.push(shop);
+    send_with(&mut c, &apps, &back, at(7)).unwrap();
+    assert_eq!(
+        missing(&c),
+        [("app:x/old".into(), State::Open, Warn)],
+        "one listing brings it back"
+    );
+
+    let later = Report { ts: at(8), ..hung };
+    send_with(&mut c, &apps[..1], &later, at(8)).unwrap();
+    assert!(
+        missing(&c).is_empty(),
+        "an app taken out of the configuration is retired, seen or not"
+    );
 }

@@ -16,7 +16,18 @@ token_sha256 = "<64 hex characters>"
 name = "ops-agent"
 token_sha256 = "<64 hex characters>"
 
-# URLs the server probes once per report interval. By default any status below 400 is up.
+# Applications you care about: described, probed, and reported missing when they disappear.
+[[apps]]
+id = "web-1/shop"               # <host>/<project>, <host>/-/<container> or <host>/_systemd/<unit>
+name = "Shop"
+env = "prod"
+note = "The web shop"
+
+[[apps.probes]]
+url = "https://shop.example.com/healthz"
+# headers = { Authorization = "Bearer <probe token>" }
+
+# URLs that belong to no application, probed once per report interval. By default any status below 400 is up.
 [[endpoints]]
 url = "https://shop.example.com/"
 customer = "acme"

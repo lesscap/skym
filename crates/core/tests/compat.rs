@@ -4,7 +4,7 @@ use skym_core::model::{
     DatastoreKind, ExceptionClass, Health, LocalEvent, RunState, WorkloadFacts, WorkloadKind,
 };
 use skym_core::report::{Report, ReportError, facts_hash, rehost, validate};
-use skym_core::subject::{Subject, WorkloadKey};
+use skym_core::subject::{AppKey, Subject, WorkloadKey};
 use skym_core::view::HostView;
 
 fn load(name: &str) -> Report {
@@ -43,6 +43,7 @@ fn older_peer_minimal_report_parses() {
     assert!(report.workloads.is_empty() && report.local_events.is_empty());
     assert!(report.host_state.mounts.is_empty());
     assert!(report.errors.is_empty(), "errors added later default to none");
+    assert!(!report.containers_listed, "an older agent never claims a complete listing");
 }
 
 #[test]
@@ -53,6 +54,9 @@ fn subject_strings_round_trip_and_reject_malformed() {
         "workload:i/_systemd/getty@tty1.service",
         "mount:i:/data:x",
         "endpoint:https://x.example.com:8443/a",
+        "app:y/nile",
+        "app:i/-/hbbs",
+        "app:x/_systemd/getty@tty1.service",
     ];
     for s in valid {
         let subject: Subject = s.parse().unwrap();
@@ -70,6 +74,13 @@ fn subject_strings_round_trip_and_reject_malformed() {
         "workload:a:b/p/s",
         "mount:i:data",
         "endpoint:",
+        "app:y",
+        "app:y/",
+        "app:/nile",
+        "app:y/-",
+        "app:y/-/",
+        "app:y/nile/api",
+        "app:a:b/nile",
         "foo:x",
         "x",
     ];
@@ -268,4 +279,42 @@ fn subjects_know_their_host() {
     assert_eq!(host("mount:x:/data"), Some("x".into()));
     assert_eq!(host("workload:x/app/api"), Some("x".into()));
     assert_eq!(host("endpoint:https://a.example"), None);
+    assert_eq!(host("app:y/nile"), Some("y".into()));
+}
+
+#[test]
+fn subjects_of_unknown_kinds_survive_a_json_read_only() {
+    let unknown: Subject = serde_json::from_str("\"queue:jobs/mail\"").unwrap();
+    assert_eq!(unknown, Subject::Unknown("queue:jobs/mail".into()));
+    assert_eq!(serde_json::to_string(&unknown).unwrap(), "\"queue:jobs/mail\"");
+    assert_eq!(unknown.host(), None);
+    assert!("queue:jobs/mail".parse::<Subject>().is_err(), "configuration and storage stay strict");
+    assert!(serde_json::from_str::<Subject>("\"app:y\"").is_err(), "a known kind, malformed");
+    assert!(serde_json::from_str::<Subject>("\"nothing\"").is_err());
+}
+
+#[test]
+fn app_keys_are_strings_in_the_schema() {
+    let schema = serde_json::to_value(schemars::schema_for!(AppKey)).unwrap();
+    assert_eq!(schema["type"], "string");
+    assert_eq!(schema["title"], "AppKey");
+    assert!(schema["description"].as_str().unwrap().starts_with("<host>/<project>"));
+}
+
+#[test]
+fn workloads_belong_to_their_project_or_stand_alone() {
+    let w = |s: &str| match s.parse::<Subject>().unwrap() {
+        Subject::Workload(k) => k,
+        _ => unreachable!(),
+    };
+    let app = |s: &str| s.parse::<AppKey>().unwrap();
+    assert_eq!(AppKey::of(&w("workload:y/nile/web")), app("y/nile"));
+    assert_eq!(AppKey::of(&w("workload:i/-/hbbs")), app("i/-/hbbs"));
+    assert_eq!(AppKey::of(&w("workload:x/_systemd/xray")), app("x/_systemd/xray"));
+    assert!(app("y/nile").contains(&w("workload:y/nile/worker")));
+    assert!(!app("y/nile").contains(&w("workload:x/nile/web")), "another host");
+    assert!(!app("i/-/hbbs").contains(&w("workload:i/-/hbbr")));
+    assert_eq!(serde_json::to_string(&app("i/-/hbbs")).unwrap(), "\"i/-/hbbs\"");
+    assert!(app("x/_systemd/xray").is_unit());
+    assert!(!app("i/-/hbbs").is_unit() && !app("y/nile").is_unit());
 }

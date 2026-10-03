@@ -4,7 +4,9 @@ use crate::app::{Msg, update};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use skym_core::rules::IncidentCode;
-use skym_core::view::{CustomerOverview, EndpointOverview, HostOverview, IncidentView, Overview};
+use skym_core::view::{
+    AppList, AppSummary, CustomerOverview, EndpointOverview, HostOverview, IncidentView, Overview,
+};
 use std::collections::BTreeMap;
 
 fn t(min: i64) -> Timestamp {
@@ -89,6 +91,7 @@ fn endpoint(url: &str, latency_ms: Option<u64>, incidents: Vec<IncidentView>) ->
         latency_ms,
         cert_expires_at: None,
         incidents,
+        app: None,
     }
 }
 
@@ -229,4 +232,49 @@ fn endpoints_show_under_the_hosts_and_among_the_problems() {
     assert!(problem.contains("shop.example.com") && problem.contains("ENDPOINT_DOWN detail"));
     assert!(line_of(&lines, " endpoint ") < line_of(&lines, "ONGOING"), "a new problem");
     line_of(&lines, "✗ 2 critical   ✓ 1 ok");
+}
+
+#[test]
+fn the_applications_page_groups_by_environment() {
+    let app_summary = |key: &str, env: Option<&str>, status: Status, endpoints| AppSummary {
+        key: key.parse().unwrap(),
+        name: key.rsplit('/').next().unwrap().into(),
+        env: env.map(String::from),
+        note: None,
+        configured: env.is_some(),
+        status,
+        services: 2,
+        running: 1,
+        last_deployed: Some(t(60)),
+        endpoints,
+        incidents: vec![],
+        links: BTreeMap::new(),
+    };
+    let list = AppList {
+        apps: vec![
+            app_summary(
+                "y/shop",
+                Some("prod"),
+                Status::Ok,
+                vec![endpoint("https://shop.example.com/", Some(84), vec![])],
+            ),
+            app_summary("y/shop-test", Some("test"), Status::Ok, vec![]),
+            app_summary("i/-/hbbs", None, Status::Ok, vec![]),
+        ],
+    };
+    let mut app = App::default();
+    update(&mut app, Msg::Key(crate::app::Key::Char('a')), t(120));
+    update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(list)))), t(120));
+    let lines = render(&app, Theme { color: false }, 100, 14);
+    let shop = line_of(&lines, " shop ");
+    assert!(line_of(&lines, "PROD") < shop && shop < line_of(&lines, "TEST"));
+    assert!(
+        lines[shop].contains("shop.example.com  84ms") && lines[shop].ends_with("1h│"),
+        "{}",
+        lines[shop]
+    );
+    assert!(lines[shop].contains("1/2"), "running of all");
+    line_of(&lines, "1 more, all ok (e)");
+    assert!(line_of(&lines, "UNCLASSIFIED") < line_of(&lines, " hbbs "));
+    line_of(&lines, "Applications (3)");
 }

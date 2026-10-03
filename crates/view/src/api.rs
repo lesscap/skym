@@ -1,8 +1,10 @@
 //! The query API of `skym-server`, read into the core view types.
 
 use serde::de::DeserializeOwned;
-use skym_core::subject::{HostId, WorkloadKey};
-use skym_core::view::{ExceptionList, HostView, IncidentList, Overview, Timeline, WorkloadView};
+use skym_core::subject::{AppKey, HostId, WorkloadKey};
+use skym_core::view::{
+    AppList, AppView, ExceptionList, HostView, IncidentList, Overview, Timeline, WorkloadView,
+};
 use std::time::Duration;
 
 /// What to read; also what an answer belongs to.
@@ -19,6 +21,8 @@ pub enum Request {
         workload: Option<WorkloadKey>,
         since: &'static str,
     },
+    Apps,
+    App(AppKey),
 }
 
 #[derive(Debug)]
@@ -29,6 +33,8 @@ pub enum Payload {
     Workload(WorkloadView),
     Exceptions(ExceptionList),
     Timeline(Timeline),
+    Apps(AppList),
+    App(AppView),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,6 +66,12 @@ impl Request {
                     format!("&workload={}/{}", encode(&k.project), encode(&k.service))
                 });
                 format!("/api/timeline?host={}{workload}&since={since}&limit=500", encode(host))
+            }
+            Request::Apps => "/api/apps".into(),
+            Request::App(a) => {
+                let service =
+                    a.service.as_ref().map_or(String::new(), |s| format!("/{}", encode(s)));
+                format!("/api/apps/{}/{}{service}", encode(&a.host), encode(&a.project))
             }
         }
     }
@@ -106,6 +118,8 @@ impl Client {
             Request::Workload(_) => Payload::Workload(self.get(request).await?),
             Request::Exceptions(_) => Payload::Exceptions(self.get(request).await?),
             Request::Timeline { .. } => Payload::Timeline(self.get(request).await?),
+            Request::Apps => Payload::Apps(self.get(request).await?),
+            Request::App(_) => Payload::App(self.get(request).await?),
         })
     }
 
@@ -159,5 +173,7 @@ mod tests {
         let host_only = Request::Timeline { host: "x".into(), workload: None, since: "6h" };
         assert_eq!(host_only.path(), "/api/timeline?host=x&since=6h&limit=500");
         assert_eq!(Request::Exceptions("x".into()).path(), "/api/exceptions?host=x&since=1h");
+        assert_eq!(Request::App("y/nile".parse().unwrap()).path(), "/api/apps/y/nile");
+        assert_eq!(Request::App("i/-/hb bs".parse().unwrap()).path(), "/api/apps/i/-/hb%20bs");
     }
 }
