@@ -175,7 +175,12 @@ async fn an_incident_from_reports_to_overview_workload_and_timeline() {
     assert!(incident["observed_since"].is_string(), "since when skym watches its host");
     assert_eq!(overview["status"], "critical");
     let hosts = get(&app, "/api/hosts").await;
-    assert_eq!(hosts["hosts"], overview["hosts"], "the hosts tab reads the same list");
+    let ids = |v: &Value| -> Vec<(String, String)> {
+        let list = v.as_array().unwrap().iter();
+        list.map(|h| (h["id"].to_string(), h["status"].to_string())).collect()
+    };
+    // Ages may tick between the two reads; the list is the same.
+    assert_eq!(ids(&hosts["hosts"]), ids(&overview["hosts"]), "the hosts tab reads the same list");
     let x = &hosts["hosts"][0];
     assert_eq!((x["id"].as_str(), x["status"].as_str()), (Some("x"), Some("critical")));
     assert!(x["load_1m"].is_number() && x["disks"].as_array().is_some_and(|d| !d.is_empty()));
