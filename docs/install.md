@@ -31,17 +31,35 @@ cargo zigbuild --release -p skym-server --target x86_64-unknown-linux-musl
    The image holds nothing but the binary: the host's CA certificates, mounted read-only, let it verify the https endpoints it probes.
 4. Point the reverse proxy at port 7280 and check `https://<server>/healthz`.
 
-Changing the configuration (a new host, reader, mute or endpoint) takes a restart.
+Changing the configuration (a new host, reader, mute, application or endpoint) takes a restart.
+
+### Applications
+
+skym lists every application it finds: a compose project, or a container outside compose or a systemd unit on its own. `[[apps]]` describes the ones you care about:
+
+```toml
+[[apps]]
+id = "web-1/shop"                 # <host>/<project>, or <host>/-/<container>, <host>/_systemd/<unit>
+name = "Shop"
+env = "prod"                      # any text; prod, pre and test sort first
+note = "The web shop; its test copy is web-1/shop-test"
+
+[[apps.probes]]                   # the application's URLs, probed like [[endpoints]]
+url = "https://shop.example.com/healthz"
+headers = { Authorization = "Bearer <probe token>" }
+```
+
+A listed container application that disappears from its host opens `APP_MISSING`: list what should be running, leave out what may come and go. systemd units can be listed too, for their name, note and probes; an absent unit is already `WORKLOAD_DOWN`. `APP_MISSING` needs agents that report complete container listings (this version or later). A container outside compose is only tracked with a restart policy (`always`, `unless-stopped` or `on-failure`); without one it is short-lived to skym, so do not list it.
 
 ### Endpoints
 
-`[[endpoints]]` in the configuration lists URLs the server probes from its own host, once per report interval: whether they answer, and when their certificates expire. See the examples in [`deploy/server.example.toml`](../deploy/server.example.toml) and the [judgement rules](judgement.md).
+`[[endpoints]]` in the configuration lists URLs that belong to no application, which the server probes from its own host, once per report interval: whether they answer, and when their certificates expire. See the examples in [`deploy/server.example.toml`](../deploy/server.example.toml) and the [judgement rules](judgement.md).
 
 For an application you run, a URL made for probing tells more than its home page:
 
 - `GET`, answering 2xx when the application can serve its users (it can reach what it needs), 503 when it cannot;
 - fast (well under 10 seconds) and free of side effects, since it is called every minute;
-- open, or behind a token of its own that grants nothing else. Put the token in the endpoint's `headers`; the file then holds a secret, so keep it mode 0600 and out of version control.
+- open, or behind a token of its own that grants nothing else. Put the token in the probe's `headers`; the file then holds a secret, so keep it mode 0600 and out of version control.
 
 ## Agent
 
@@ -77,6 +95,10 @@ skym-view --server https://skym.example.com
 ```
 
 `~/.config/skym/env` holds `KEY=VALUE` lines (`SKYM_URL=…`, `SKYM_TOKEN=<reader token>`); keep it mode 0600. Press `?` in the view for its keys.
+
+## Upgrading
+
+Install the new `skym-view` first, then the server, then the agents. Newer servers may send subjects and fields older views do not know; newer agents may send fields older servers ignore.
 
 ## AI agents
 

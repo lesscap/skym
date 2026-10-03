@@ -52,15 +52,15 @@ fn spawn_probes(store: Store, cfg: Arc<ServerConfig>) {
         Ok(p) => Arc::new(p),
         Err(e) => return tracing::error!("probes disabled, no HTTP client: {e:#}"),
     };
+    let endpoints = Arc::new(cfg.probed());
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(cfg.report_interval.unsigned_abs());
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            let probed = prober.all(&cfg.endpoints).await;
-            let cfg = cfg.clone();
-            let run =
-                store.call(move |c| probes_once(c, &cfg.endpoints, &probed, Timestamp::now()));
+            let probed = prober.all(&endpoints).await;
+            let endpoints = endpoints.clone();
+            let run = store.call(move |c| probes_once(c, &endpoints, &probed, Timestamp::now()));
             if let Err(e) = run.await {
                 tracing::error!("probes: {e:#}");
             }

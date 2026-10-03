@@ -28,14 +28,107 @@ impl WorkloadKey {
     }
 }
 
+/// An application: a compose project, or a lone container (project `-`) or systemd unit
+/// (`_systemd`), which have no project to group them. Written `<host>/<project>` or
+/// `<host>/<project>/<service>`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AppKey {
+    pub host: HostId,
+    pub project: String,
+    pub service: Option<String>,
+}
+
+/// Projects that name no application: each of their workloads is one.
+fn lone(project: &str) -> bool {
+    project == "-" || project == "_systemd"
+}
+
+impl AppKey {
+    /// A systemd unit: declared in the agent's configuration, so its absence is `WORKLOAD_DOWN`.
+    pub fn is_unit(&self) -> bool {
+        self.project == "_systemd"
+    }
+
+    /// The application a workload belongs to.
+    pub fn of(w: &WorkloadKey) -> AppKey {
+        AppKey {
+            host: w.host.clone(),
+            project: w.project.clone(),
+            service: lone(&w.project).then(|| w.service.clone()),
+        }
+    }
+
+    pub fn contains(&self, w: &WorkloadKey) -> bool {
+        *self == AppKey::of(w)
+    }
+}
+
+impl fmt::Display for AppKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.host, self.project)?;
+        self.service.as_ref().map_or(Ok(()), |s| write!(f, "/{s}"))
+    }
+}
+
+impl FromStr for AppKey {
+    type Err = SubjectError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let err = || SubjectError(s.to_string());
+        let (host, rest) = s.split_once('/').ok_or_else(err)?;
+        let (project, service) = match rest.split_once('/') {
+            Some((p, svc)) => (p, Some(svc.to_string())),
+            None => (rest, None),
+        };
+        let key = AppKey { host: host.into(), project: project.into(), service };
+        let valid = valid_host(host)
+            && !project.is_empty()
+            && key.service.as_ref().is_some_and(|s| !s.is_empty()) == lone(project);
+        valid.then_some(key).ok_or_else(err)
+    }
+}
+
+impl Serialize for AppKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for AppKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?.parse().map_err(de::Error::custom)
+    }
+}
+
+impl JsonSchema for AppKey {
+    fn schema_name() -> Cow<'static, str> {
+        "AppKey".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "description": "<host>/<project>, or <host>/<project>/<service> for a lone container (project -) or systemd unit (_systemd)"
+        })
+    }
+}
+
 /// What an incident or event is about. Serialized as one canonical string:
-/// `host:<h>`, `workload:<h>/<project>/<service>`, `mount:<h>:<path>`, `endpoint:<url>`.
+/// `host:<h>`, `workload:<h>/<project>/<service>`, `mount:<h>:<path>`, `endpoint:<url>`,
+/// `app:<app key>`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Subject {
     Host(HostId),
     Workload(WorkloadKey),
-    Mount { host: HostId, path: String },
+    Mount {
+        host: HostId,
+        path: String,
+    },
     Endpoint(String),
+    App(AppKey),
+    /// A kind a newer server added, kept verbatim. Only JSON reads produce it: parsing a
+    /// string (configuration, storage) rejects what it does not know.
+    Unknown(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +148,8 @@ impl Subject {
         match self {
             Subject::Host(h) | Subject::Mount { host: h, .. } => Some(h),
             Subject::Workload(k) => Some(&k.host),
-            Subject::Endpoint(_) => None,
+            Subject::App(a) => Some(&a.host),
+            Subject::Endpoint(_) | Subject::Unknown(_) => None,
         }
     }
 }
@@ -67,6 +161,8 @@ impl fmt::Display for Subject {
             Subject::Workload(k) => write!(f, "workload:{}/{}/{}", k.host, k.project, k.service),
             Subject::Mount { host, path } => write!(f, "mount:{host}:{path}"),
             Subject::Endpoint(url) => write!(f, "endpoint:{url}"),
+            Subject::App(a) => write!(f, "app:{a}"),
+            Subject::Unknown(s) => f.write_str(s),
         }
     }
 }
@@ -85,6 +181,7 @@ impl FromStr for Subject {
                     .then(|| Subject::Mount { host: host.to_string(), path: path.to_string() })
             }),
             "endpoint" => (!rest.is_empty()).then(|| Subject::Endpoint(rest.to_string())),
+            "app" => rest.parse().ok().map(Subject::App),
             _ => None,
         };
         parsed.ok_or_else(err)
@@ -112,9 +209,16 @@ impl Serialize for Subject {
     }
 }
 
+const KINDS: [&str; 5] = ["host", "workload", "mount", "endpoint", "app"];
+
 impl<'de> Deserialize<'de> for Subject {
+    /// A malformed subject of a known kind is an error; one of an unknown kind is kept.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?.parse().map_err(de::Error::custom)
+        let s = String::deserialize(deserializer)?;
+        match s.split_once(':') {
+            Some((kind, _)) if !KINDS.contains(&kind) => Ok(Subject::Unknown(s)),
+            _ => s.parse().map_err(de::Error::custom),
+        }
     }
 }
 
@@ -126,8 +230,7 @@ impl JsonSchema for Subject {
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "string",
-            "pattern": "^(host|workload|mount|endpoint):",
-            "description": "host:<h> | workload:<h>/<project>/<service> | mount:<h>:<path> | endpoint:<url>"
+            "description": "host:<h> | workload:<h>/<project>/<service> | mount:<h>:<path> | endpoint:<url> | app:<h>/<project>[/<service>]; consumers keep other kinds a newer server adds"
         })
     }
 }

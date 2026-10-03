@@ -7,7 +7,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use jiff::{SignedDuration, Timestamp};
 use skym_core::rules::IncidentCode;
-use skym_server::config::Endpoint;
+use skym_server::config::{Endpoint, Headers};
 use skym_server::db;
 use skym_server::evaluate::probes_once;
 use skym_server::lifecycle::State;
@@ -23,7 +23,8 @@ fn endpoint(url: &str, headers: &[(&str, &str)]) -> Endpoint {
         url: url.into(),
         customer: "acme".into(),
         expect: vec![],
-        headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        headers: Headers(headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()),
+        app: None,
     }
 }
 

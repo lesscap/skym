@@ -1,7 +1,10 @@
-//! Findings only the server can make: lost heartbeats, disk projection and probes.
+//! Findings only the server can make: lost heartbeats, disk projection, probes and
+//! applications gone missing.
 
+use crate::config::AppConfig;
 use crate::probe::Probe;
 use jiff::{SignedDuration, Timestamp};
+use skym_core::report::Report;
 use skym_core::rules::{Finding, IncidentCode, Severity};
 use skym_core::subject::{HostId, Subject};
 use skym_core::time::format_duration;
@@ -125,6 +128,33 @@ fn expiring(not_after: Timestamp, now: Timestamp) -> Option<(Severity, String)> 
         format!("certificate expires {date} (in {})", format_duration(left))
     };
     Some((if left <= day * 7 { Severity::Critical } else { Severity::Warn }, detail))
+}
+
+/// Configured container applications of the reporting host with nothing in the report, not
+/// even a stopped container (that is `WORKLOAD_DOWN`), when the agent listed every container.
+/// systemd units are declared to the agent, so a missing one is `WORKLOAD_DOWN` too.
+/// Critical in `prod`, warn elsewhere.
+pub fn missing_apps(r: &Report, apps: &[AppConfig]) -> Vec<Finding> {
+    if !r.containers_listed {
+        return Vec::new();
+    }
+    apps.iter()
+        .filter(|a| a.id.host == r.host && !a.id.is_unit())
+        .filter(|a| !r.workloads.iter().any(|w| a.id.contains(&w.key)))
+        .map(|a| Finding {
+            subject: Subject::App(a.id.clone()),
+            code: IncidentCode::AppMissing,
+            severity: if a.env.as_deref() == Some("prod") {
+                Severity::Critical
+            } else {
+                Severity::Warn
+            },
+            detail: match &a.id.service {
+                Some(container) => format!("no container {container} on {}", r.host),
+                None => format!("no container of {} on {}", a.id.project, r.host),
+            },
+        })
+        .collect()
 }
 
 /// One finding per `(subject, code)`: the highest severity, details joined.
@@ -303,6 +333,43 @@ mod tests {
         );
         let both = judged(&[], &probe(Ok(503), Some(1)));
         assert_eq!(both.len(), 2, "down and expiring are separate incidents");
+    }
+
+    fn app(id: &str, env: Option<&str>) -> AppConfig {
+        AppConfig {
+            id: id.parse().unwrap(),
+            name: None,
+            env: env.map(String::from),
+            note: None,
+            probes: vec![],
+        }
+    }
+
+    #[test]
+    fn container_apps_go_missing_only_from_a_complete_listing() {
+        let mut r = skym_core::fixtures::full_report(); // x: captain/api, pg/main, _systemd/xray
+        r.workloads[0].state.run = skym_core::model::RunState::Exited;
+        let apps = [
+            app("x/captain", Some("prod")),
+            app("x/shop", Some("prod")),
+            app("x/-/redis", Some("test")),
+            app("x/_systemd/nginx", Some("prod")),
+            app("y/shop", Some("prod")),
+        ];
+        assert!(missing_apps(&r, &apps).is_empty(), "no complete listing, no judgement");
+        r.containers_listed = true;
+        let found: Vec<(String, Severity, String)> = missing_apps(&r, &apps)
+            .into_iter()
+            .map(|f| (f.subject.to_string(), f.severity, f.detail))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("app:x/shop".into(), Severity::Critical, "no container of shop on x".into()),
+                ("app:x/-/redis".into(), Severity::Warn, "no container redis on x".into()),
+            ],
+            "an exited container is still there; a unit is WORKLOAD_DOWN's; other hosts judge theirs"
+        );
     }
 
     #[test]

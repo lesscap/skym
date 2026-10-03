@@ -143,6 +143,7 @@ fn endpoints_list_with_the_hosts_and_can_be_picked_alone() {
         latency_ms: None,
         cert_expires_at: None,
         incidents: vec![down.clone()],
+        app: None,
     }];
     let p = problems(&o, &[], None, t(120));
     assert_eq!(subjects(&p.new), [format!("endpoint:{url}")], "new by the endpoint's own watch");

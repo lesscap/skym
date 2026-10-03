@@ -13,6 +13,7 @@ A small `skym` binary runs on every host. It checks the host, its containers and
 | Datastores | Postgres, MySQL and Redis containers answering a local probe; Postgres replication lag |
 | systemd units | declared services running and listening on their ports |
 | Applications | exceptions they write to stdout or stderr, grouped by component and code |
+| Applications | every compose project (and lone container or systemd unit), described in the configuration; a listed one that disappears |
 | Endpoints | configured URLs, probed by the server: answering as expected, and certificates close to expiry |
 
 Thresholds, severities, and when an incident opens or resolves are decided by skym, not by whoever reads the result: see the [judgement rules](docs/judgement.md).

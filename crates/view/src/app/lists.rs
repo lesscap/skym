@@ -1,11 +1,12 @@
 //! What the screens list, derived from the data: hosts, problems, services.
 
 use super::{App, Pane, Screen};
+use crate::apps::{self, Group, groups};
 use crate::names;
 use crate::problems::{Problems, Row, problems};
 use jiff::Timestamp;
 use skym_core::subject::Subject;
-use skym_core::view::{Status, WorkloadSummary};
+use skym_core::view::{AppSummary, Status, WorkloadSummary};
 
 impl App {
     /// What the left pane lists, in the overview's order: each customer's hosts, then its
@@ -60,13 +61,14 @@ impl App {
         p.new.into_iter().chain(p.ongoing).chain(info).collect()
     }
 
-    /// A host's services: those with problems first, then by name.
+    /// The services of the host or application in view: those with problems first.
     pub fn services(&self) -> Vec<&WorkloadSummary> {
-        let mut list: Vec<&WorkloadSummary> = self
-            .host
-            .value
-            .iter()
-            .flat_map(|h| &h.workloads)
+        let all = match &self.frame().screen {
+            Screen::App(_) => self.app.value.iter().flat_map(|a| &a.workloads).collect::<Vec<_>>(),
+            _ => self.host.value.iter().flat_map(|h| &h.workloads).collect(),
+        };
+        let mut list: Vec<&WorkloadSummary> = all
+            .into_iter()
             .filter(|w| self.matches(&names::full(&Subject::Workload(w.key.clone()))))
             .collect();
         list.sort_by(|a, b| {
@@ -74,6 +76,17 @@ impl App {
             worse(b).cmp(&worse(a)).then(b.status.cmp(&a.status)).then(a.key.cmp(&b.key))
         });
         list
+    }
+
+    /// The applications page's groups, filtered by name, host, URL or note.
+    pub fn app_groups(&self) -> Vec<Group<'_>> {
+        let list = self.apps.value.as_ref().map_or(&[][..], |l| l.apps.as_slice());
+        groups(list, self.all_envs, |a| self.matches(&apps::text(a)))
+    }
+
+    /// The applications as listed, for moving the selection.
+    pub fn app_rows(&self) -> Vec<&AppSummary> {
+        self.app_groups().into_iter().flat_map(|g| g.apps).collect()
     }
 
     /// Keeps the picked host within the host list as it shrinks.
@@ -90,7 +103,8 @@ impl App {
         match (&self.frame().screen, self.pane) {
             (Screen::Overview, Pane::Hosts) => self.targets().len() + 1,
             (Screen::Overview, Pane::Problems) => self.problem_rows(now).len(),
-            (Screen::Host(_), _) => self.services().len(),
+            (Screen::Host(_) | Screen::App(_), _) => self.services().len(),
+            (Screen::Apps, _) => self.app_rows().len(),
             (Screen::Workload(_), _) => {
                 self.workload.value.as_ref().map_or(0, |w| w.exceptions.len())
             }

@@ -79,7 +79,7 @@ fn header(h: &HostView, now: Timestamp, theme: Theme) -> Vec<Line<'static>> {
     lines
 }
 
-fn service_table(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
+pub(super) fn service_table(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
     let services = app.services();
     let rows: Vec<Row> = services
         .iter()
