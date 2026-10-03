@@ -44,15 +44,15 @@ struct WorkloadKey {
     service: String,             // compose service, container name, or systemd unit
 }
 
-struct Endpoint {
+struct Endpoint {                // configured on the server, probed from it
     url: Url,
-    workload: Option<WorkloadKey>,
+    customer: CustomerId,
 }
 ```
 
 ```text
 Customer 1─* Host 1─* Workload 1─* ExceptionGroup
-Endpoint *─? Workload
+Customer 1─* Endpoint
 Incident.subject ∈ Host ∪ Workload ∪ Mount ∪ Endpoint
 Event.subject    ∈ Host ∪ Workload
 ```
@@ -164,7 +164,7 @@ now − host.last_seen > 3 × report_interval ⇒ open Incident { subject: host,
 | `LOG_UNBOUNDED` | Host | Containers on the `json-file` log driver without a size limit, listed in the detail |
 | `DATASTORE_UNREACHABLE` | Workload (Datastore) | A discovered database does not answer a local probe |
 | `REPLICATION_LAG` | Workload (Datastore) | Postgres standby lags behind |
-| `ENDPOINT_DOWN` | Endpoint | 5xx or timeout from an external probe |
+| `ENDPOINT_DOWN` | Endpoint | No answer, or an unexpected status, from the server's probe |
 | `CERT_EXPIRING` | Endpoint | TLS certificate expires soon (read from the probe's handshake) |
 | `APP_EXCEPTIONS` | Workload | Application-class exception groups above a threshold |
 

@@ -58,7 +58,7 @@ token_sha256 = "…"
 
 ### Status
 
-`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Only `warn` and `critical` incidents count; `info` incidents (hygiene) are listed, and counted in the overview's `info_count`. Hosts are listed by urgency: critical, then unknown, then warn, then ok. Muted incidents never count towards a status. `incidents` lists them only with `include_muted=true`; host and workload views include them with `muted: true`; the overview leaves them out and counts them in `muted_count`.
+`ok`, `warn`, `critical`, or `unknown` for a configured host that never reported. Only `warn` and `critical` incidents count; `info` incidents (hygiene) are listed, and counted in the overview's `info_count`. Hosts are listed by urgency: critical, then unknown, then warn, then ok; so are each customer's `endpoints`, which are `unknown` until first probed and when not probed for three report intervals. Muted incidents never count towards a status. `incidents` lists them only with `include_muted=true`; host and workload views include them with `muted: true`; the overview leaves them out and counts them in `muted_count`.
 
 ### Lists and timeline
 
@@ -103,6 +103,18 @@ token_sha256 = "…"
           "last_report_ago": "12s",
           "incidents": [],
           "links": { "host": "/api/hosts/web-2" }
+        }
+      ],
+      "endpoints": [
+        {
+          "url": "https://shop.example.com/",
+          "status": "ok",
+          "last_probe_ago": "20s",
+          "observed_since": "2026-09-01T08:00:00Z",
+          "http_status": 200,
+          "latency_ms": 84,
+          "cert_expires_at": "2026-11-03T23:59:59Z",
+          "incidents": []
         }
       ]
     }

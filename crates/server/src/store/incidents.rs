@@ -51,6 +51,11 @@ pub fn active_with_code(c: &Connection, code: IncidentCode) -> rusqlite::Result<
     query(c, "code = ?1 AND state <> 'resolved'", [code.as_str()])
 }
 
+/// Pending and open incidents of endpoints, which belong to no host.
+pub fn active_endpoints(c: &Connection) -> rusqlite::Result<Vec<Incident>> {
+    query(c, "host IS NULL AND subject LIKE 'endpoint:%' AND state <> 'resolved'", [])
+}
+
 pub fn latest_resolved(
     c: &Connection,
     subject: &Subject,

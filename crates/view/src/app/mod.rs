@@ -106,7 +106,7 @@ pub struct App {
     pub exceptions: Data<ExceptionList>,
     pub timeline: Data<Timeline>,
     pub pane: Pane,
-    /// 0 is "All hosts", then `host_ids()` in order.
+    /// 0 is "All hosts", then `targets()` in order.
     pub host_cursor: usize,
     pub filter: Option<String>,
     pub editing: bool,

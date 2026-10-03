@@ -7,7 +7,7 @@ exclude_re = [
     "datastore.rs.*replace query_lag ->",
     "logs.rs.*(in|replace) read(_one|_tail)?\\b",
     # Background loops of the server; what they call (heartbeat_once, maintain) is tested.
-    "tasks.rs.*\\bspawn\\b",
+    "tasks.rs.*\\bspawn(_probes)?\\b",
     # The agent's tick loop and signals; each pass is tested against a real server.
     "agent.rs.*(in|replace) run\\b",
     # Not covered by the tests, which run without Docker (no log lines) and, on macOS, without

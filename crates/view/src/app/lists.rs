@@ -4,15 +4,19 @@ use super::{App, Pane, Screen};
 use crate::names;
 use crate::problems::{Problems, Row, problems};
 use jiff::Timestamp;
-use skym_core::subject::{HostId, Subject};
+use skym_core::subject::Subject;
 use skym_core::view::{Status, WorkloadSummary};
 
 impl App {
-    /// Hosts in the overview's order: by customer, most urgent first.
-    pub fn host_ids(&self) -> Vec<&HostId> {
+    /// What the left pane lists, in the overview's order: each customer's hosts, then its
+    /// endpoints, most urgent first.
+    pub fn targets(&self) -> Vec<Subject> {
         let customers = self.overview.value.iter().flat_map(|o| &o.customers);
-        let ids = customers.flat_map(|c| &c.hosts).map(|h| &h.id);
-        ids.filter(|id| !self.filtering(Pane::Hosts) || self.matches(id)).collect()
+        let all = customers.flat_map(|c| {
+            let hosts = c.hosts.iter().map(|h| Subject::Host(h.id.clone()));
+            hosts.chain(c.endpoints.iter().map(|e| Subject::Endpoint(e.url.clone())))
+        });
+        all.filter(|s| !self.filtering(Pane::Hosts) || self.matches(&names::target(s))).collect()
     }
 
     /// When skym started watching a host, from the overview.
@@ -26,9 +30,9 @@ impl App {
         self.frame().screen == Screen::Overview && self.pane == pane
     }
 
-    /// The host picked in the overview's left pane, if not "All hosts".
-    pub fn picked_host(&self) -> Option<&HostId> {
-        self.host_cursor.checked_sub(1).and_then(|i| self.host_ids().get(i).copied())
+    /// The host or endpoint picked in the overview's left pane, if not "All hosts".
+    pub fn picked(&self) -> Option<Subject> {
+        self.host_cursor.checked_sub(1).and_then(|i| self.targets().into_iter().nth(i))
     }
 
     /// The overview's problems for the picked host, filtered by name.
@@ -38,7 +42,7 @@ impl App {
             (Some(list), true) => list.incidents.as_slice(),
             _ => &[],
         };
-        let mut p = problems(overview, muted, self.picked_host().map(String::as_str), now);
+        let mut p = problems(overview, muted, self.picked().as_ref(), now);
         if self.filtering(Pane::Problems) {
             for group in [&mut p.new, &mut p.ongoing, &mut p.info] {
                 group.retain(|r| {
@@ -74,7 +78,7 @@ impl App {
 
     /// Keeps the picked host within the host list as it shrinks.
     pub(super) fn clamp_host_cursor(&mut self) {
-        self.host_cursor = self.host_cursor.min(self.host_ids().len());
+        self.host_cursor = self.host_cursor.min(self.targets().len());
     }
 
     fn matches(&self, name: &str) -> bool {
@@ -84,7 +88,7 @@ impl App {
     /// How many rows the current list has (for moving the selection).
     pub(super) fn rows(&self, now: Timestamp) -> usize {
         match (&self.frame().screen, self.pane) {
-            (Screen::Overview, Pane::Hosts) => self.host_ids().len() + 1,
+            (Screen::Overview, Pane::Hosts) => self.targets().len() + 1,
             (Screen::Overview, Pane::Problems) => self.problem_rows(now).len(),
             (Screen::Host(_), _) => self.services().len(),
             (Screen::Workload(_), _) => {

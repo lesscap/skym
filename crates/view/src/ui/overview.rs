@@ -2,7 +2,7 @@
 
 use super::{Theme, age, block, empty_row, reason};
 use crate::app::{App, Pane};
-use crate::names::{service, short};
+use crate::names::{service, short, target};
 use crate::problems::Row;
 use jiff::Timestamp;
 use ratatui::Frame;
@@ -11,6 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row as TableRow, Table, TableState};
 use skym_core::rules::Severity;
+use skym_core::subject::Subject;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
     let [left, right] =
@@ -28,21 +29,32 @@ fn hosts(f: &mut Frame, area: Rect, app: &App, theme: Theme) {
         style(app.host_cursor == 0),
     )];
     let mut picked_line = 0;
-    let ids = app.host_ids();
+    let targets = app.targets();
     for c in app.overview.value.iter().flat_map(|o| &o.customers) {
         lines.push(Line::styled(c.name.clone(), theme.dim()));
-        for h in c.hosts.iter().filter(|h| ids.contains(&&h.id)) {
-            let index = 1 + ids.iter().position(|id| **id == h.id).unwrap_or(0);
-            let selected = index == app.host_cursor;
+        let hosts = c.hosts.iter().map(|h| {
+            let reported = h.last_report_ago.clone().unwrap_or_else(|| "never".into());
+            (Subject::Host(h.id.clone()), h.status, reported)
+        });
+        let endpoints = c.endpoints.iter().map(|e| {
+            let answered = match (&e.last_probe_ago, e.latency_ms) {
+                (None, _) => "never".to_string(),
+                (Some(_), Some(ms)) => latency(ms),
+                (Some(_), None) => "—".to_string(),
+            };
+            (Subject::Endpoint(e.url.clone()), e.status, answered)
+        });
+        for (subject, status, right) in hosts.chain(endpoints) {
+            let Some(index) = targets.iter().position(|t| *t == subject) else { continue };
+            let selected = index + 1 == app.host_cursor;
             if selected {
                 picked_line = lines.len();
             }
-            let reported = h.last_report_ago.clone().unwrap_or_else(|| "never".into());
             lines.push(
                 Line::from(vec![
                     Span::raw(mark(selected)),
-                    theme.status(h.status),
-                    Span::raw(format!(" {:<10} {:>7}", h.id, reported)),
+                    theme.status(status),
+                    Span::raw(format!(" {:<11} {:>7}", cut(&target(&subject), 11), right)),
                 ])
                 .style(style(selected)),
             );
@@ -55,6 +67,19 @@ fn hosts(f: &mut Frame, area: Rect, app: &App, theme: Theme) {
         Paragraph::new(lines).scroll((scroll, 0)).block(block(title.into(), theme)),
         area,
     );
+}
+
+/// `840ms`, `1.2s`.
+fn latency(ms: u64) -> String {
+    if ms < 1000 { format!("{ms}ms") } else { format!("{:.1}s", ms as f64 / 1000.0) }
+}
+
+/// At most `width` characters, the last one `…` when cut.
+fn cut(text: &str, width: usize) -> String {
+    match text.chars().count() > width {
+        true => text.chars().take(width - 1).chain(['…']).collect(),
+        false => text.to_string(),
+    }
 }
 
 fn problem_list(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
@@ -91,7 +116,7 @@ fn problem_list(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: The
         (false, n) => table.push(empty_row(3, format!("· {n} hygiene items (h)"), theme)),
     }
     let selected = focused.then(|| selectable.get(app.frame().cursor).copied()).flatten();
-    let scope = app.picked_host().map_or("all hosts".to_string(), |h| h.clone());
+    let scope = app.picked().map_or("all hosts".to_string(), |t| target(&t));
     let title = format!(" Problems · {scope}{} ", if focused { " ▪" } else { "" });
     let widths = [
         Constraint::Length(3),

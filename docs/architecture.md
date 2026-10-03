@@ -10,7 +10,8 @@ every host                                  your own machine
 │   (CLI for humans/agents)  │ ───────────▶ │   token)                     │
 │  skym agent                │  every 60s   │  SQLite store                │
 │   (collect + report)       │              │  heartbeat timeout detection │
-└────────────────────────────┘              │  query API                   │
+└────────────────────────────┘              │  endpoint and TLS probes ────┼──▶ configured URLs
+                                            │  query API                   │
                                             └──────────────▲───────────────┘
                                                            │ HTTPS GET (token)
                                                    AI agent (skill) / skym-view
@@ -19,7 +20,7 @@ every host                                  your own machine
 | Component | Runs on | Role |
 | --- | --- | --- |
 | `skym` | every monitored host | One binary. As a CLI it answers "how is this host right now" locally. As `skym agent` it collects on a fixed interval and pushes a report. |
-| `skym-server` | a machine you control | Receives reports, stores the latest state, derives events and incidents, detects lost heartbeats, serves the query API. |
+| `skym-server` | a machine you control | Receives reports, stores the latest state, derives events and incidents, detects lost heartbeats, probes configured URLs, serves the query API. |
 | [skill](../skill/SKILL.md) | the agent's side | A document that tells an AI agent how to call the API and read the results. |
 | `skym-view` | your own machine | A read-only terminal view over the same API. It contains no judgement of its own. |
 
@@ -52,7 +53,7 @@ In Rust: no `deny_unknown_fields`, `#[serde(default)]` on non-`Option` fields ad
 - **Outbound only.** The host opens no listening port for skym.
 - **No command channel.** Server responses only acknowledge receipt. The server cannot make `skym` run anything, change configuration or fetch extra data. Upgrades are pulled or installed by the host owner.
 - **Per-host tokens.** Each host has its own token, which can only write reports for that host. The server derives the host identity from the token and ignores any host name in the payload.
-- **Credentials stay on the host.** Probes that need credentials (for example, connecting to a database found in a container) read them and run locally; only the result is reported.
+- **Credentials stay on the host.** Probes that need credentials (for example, connecting to a database found in a container) read them and run locally; only the result is reported. The one exception is a token for an endpoint probe: it lives in the server's configuration, is sent only to that endpoint's origin, and never appears in the API or logs.
 - **Data minimization.** Container environment variables are never reported. Only whitelisted labels (`com.docker.compose.*`) are reported. Public IP addresses are not reported. Exception messages are truncated and filtered for common secret patterns before leaving the host.
 - **Read-only checks.** `skym` runs as a dedicated user and only reads. It never runs `docker exec` or anything else inside containers. Note that access to the Docker socket is effectively root access; host owners who do not accept that can disable container checks.
 - **Single operator.** skym is run by one team for all the hosts it looks after. Hosts are grouped by customer, but customers have no access to skym. Every reader token sees everything; each person or agent gets its own token so access can be told apart and revoked.

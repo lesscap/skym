@@ -4,6 +4,7 @@
 pub mod history;
 pub mod hosts;
 pub mod incidents;
+pub mod probes;
 
 use jiff::Timestamp;
 use rusqlite::Connection;

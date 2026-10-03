@@ -1,17 +1,18 @@
 //! Stored rows → the JSON views of the query API. Pure.
 
-use crate::config::{Mute, ServerConfig};
+use crate::config::{Endpoint, Mute, ServerConfig};
 use crate::lifecycle::{Change, Incident, State};
 use crate::store::hosts::{HostRow, WorkloadRow};
 use crate::store::incidents::LogEntry;
-use jiff::Timestamp;
+use crate::store::probes::ProbeRow;
+use jiff::{SignedDuration, Timestamp};
 use skym_core::model::{Event, ExceptionGroup};
 use skym_core::rules::{IncidentCode, Severity};
 use skym_core::subject::{CustomerId, HostId, Subject, WorkloadKey};
 use skym_core::time::format_duration;
 use skym_core::view::{
-    CustomerOverview, HostOverview, HostView, IncidentView, Overview, Status, Timeline,
-    TimelineEntry, TimelineKind, WorkloadView, rollup, workload_summary,
+    CustomerOverview, EndpointOverview, HostOverview, HostView, IncidentView, Overview, Status,
+    Timeline, TimelineEntry, TimelineKind, WorkloadView, rollup, workload_summary,
 };
 use std::collections::BTreeMap;
 
@@ -96,9 +97,9 @@ pub fn encode(segment: &str) -> String {
         .collect()
 }
 
-/// A host that never reported is unknown.
-pub fn host_status(incidents: &[IncidentView], reported: bool) -> Status {
-    if reported { rollup(incidents) } else { Status::Unknown }
+/// A host that never reported, or an endpoint without a recent probe, is unknown.
+pub fn status(incidents: &[IncidentView], known: bool) -> Status {
+    if known { rollup(incidents) } else { Status::Unknown }
 }
 
 /// One host as stored; `row` is `None` until it first reports.
@@ -118,7 +119,7 @@ pub fn host(
         })
         .collect();
     HostView {
-        status: host_status(&incidents, row.is_some()),
+        status: status(&incidents, row.is_some()),
         last_report_ago: row.as_ref().map(|r| format_duration(now.duration_since(r.last_seen))),
         observed_since: row.as_ref().map(|r| r.first_seen),
         facts: row.as_ref().and_then(|r| r.facts.clone()),
@@ -156,10 +157,11 @@ pub struct Seen {
     pub last: Timestamp,
 }
 
-/// Customers in configuration order; within each, the most urgent hosts first.
+/// Customers in configuration order; within each, the most urgent hosts and endpoints first.
 pub fn overview(
     cfg: &ServerConfig,
     seen: &BTreeMap<HostId, Seen>,
+    probes: &BTreeMap<String, ProbeRow>,
     open: &[IncidentView],
     now: Timestamp,
 ) -> Overview {
@@ -178,7 +180,7 @@ pub fn overview(
                     let seen = seen.get(&h.id);
                     HostOverview {
                         id: h.id.clone(),
-                        status: host_status(&mine, seen.is_some()),
+                        status: status(&mine, seen.is_some()),
                         last_report_ago: seen.map(|s| format_duration(now.duration_since(s.last))),
                         observed_since: seen.map(|s| s.first),
                         info_count: mine.iter().filter(|i| i.severity == Severity::Info).count()
@@ -189,11 +191,20 @@ pub fn overview(
                 })
                 .collect();
             hosts.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.id.cmp(&b.id)));
+            let mut endpoints: Vec<EndpointOverview> = cfg
+                .endpoints
+                .iter()
+                .filter(|e| e.customer == c.id)
+                .map(|e| endpoint(e, probes.get(&e.url), open, cfg.report_interval, now))
+                .collect();
+            endpoints.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.url.cmp(&b.url)));
+            let statuses = hosts.iter().map(|h| h.status).chain(endpoints.iter().map(|e| e.status));
             CustomerOverview {
                 id: c.id.clone(),
                 name: c.name.clone(),
-                status: hosts.iter().map(|h| h.status).max().unwrap_or(Status::Ok),
+                status: statuses.max().unwrap_or(Status::Ok),
                 hosts,
+                endpoints,
             }
         })
         .collect();
@@ -202,6 +213,31 @@ pub fn overview(
         status: customers.iter().map(|c| c.status).max().unwrap_or(Status::Ok),
         muted_count: open.iter().filter(|i| i.muted).count() as u32,
         customers,
+    }
+}
+
+/// One endpoint with its unmuted open incidents; `row` is `None` until it is first probed.
+/// A probe older than three intervals says nothing about now: the probes have stopped.
+fn endpoint(
+    e: &Endpoint,
+    row: Option<&ProbeRow>,
+    open: &[IncidentView],
+    interval: SignedDuration,
+    now: Timestamp,
+) -> EndpointOverview {
+    let subject = Subject::Endpoint(e.url.clone());
+    let mine: Vec<IncidentView> =
+        open.iter().filter(|i| i.subject == subject && !i.muted).cloned().collect();
+    let answered = row.filter(|r| r.probe.response.is_ok());
+    EndpointOverview {
+        url: e.url.clone(),
+        status: status(&mine, row.is_some_and(|r| now.duration_since(r.probe.at) <= interval * 3)),
+        last_probe_ago: row.map(|r| format_duration(now.duration_since(r.probe.at))),
+        observed_since: row.map(|r| r.first_seen),
+        http_status: answered.and_then(|r| r.probe.response.clone().ok()),
+        latency_ms: answered.map(|r| r.probe.latency_ms),
+        cert_expires_at: answered.and_then(|r| r.probe.cert_not_after),
+        incidents: mine,
     }
 }
 

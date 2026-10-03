@@ -15,3 +15,20 @@ token_sha256 = "<64 hex characters>"
 [[readers]]
 name = "ops-agent"
 token_sha256 = "<64 hex characters>"
+
+# URLs the server probes once per report interval. By default any status below 400 is up.
+[[endpoints]]
+url = "https://shop.example.com/"
+customer = "acme"
+
+# A URL that answers 401 without a token is up when it does.
+[[endpoints]]
+url = "https://admin.example.com/"
+customer = "acme"
+expect = [401]
+
+# A probe URL that wants a token. Header values are secrets: keep this file private (0600).
+[[endpoints]]
+url = "https://api.example.com/healthz"
+customer = "acme"
+headers = { Authorization = "Bearer <probe token>" }

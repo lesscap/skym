@@ -28,7 +28,17 @@ cargo zigbuild --release -p skym-server --target x86_64-unknown-linux-musl
    ```
 4. Point the reverse proxy at port 7280 and check `https://<server>/healthz`.
 
-Changing the configuration (a new host, reader or mute) takes a restart.
+Changing the configuration (a new host, reader, mute or endpoint) takes a restart.
+
+### Endpoints
+
+`[[endpoints]]` in the configuration lists URLs the server probes from its own host, once per report interval: whether they answer, and when their certificates expire. See the examples in [`deploy/server.example.toml`](../deploy/server.example.toml) and the [judgement rules](judgement.md).
+
+For an application you run, a URL made for probing tells more than its home page:
+
+- `GET`, answering 2xx when the application can serve its users (it can reach what it needs), 503 when it cannot;
+- fast (well under 10 seconds) and free of side effects, since it is called every minute;
+- open, or behind a token of its own that grants nothing else. Put the token in the endpoint's `headers`; the file then holds a secret, so keep it mode 0600 and out of version control.
 
 ## Agent
 

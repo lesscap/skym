@@ -1,8 +1,9 @@
-//! Background work: heartbeat evaluation and daily maintenance.
+//! Background work: heartbeat evaluation, endpoint probes and daily maintenance.
 
 use crate::config::ServerConfig;
-use crate::evaluate::heartbeat_once;
+use crate::evaluate::{heartbeat_once, probes_once};
 use crate::lifecycle;
+use crate::probe::{self, Prober};
 use crate::store::{Store, history, hosts, incidents};
 use jiff::{SignedDuration, Timestamp};
 use skym_core::subject::Subject;
@@ -16,6 +17,7 @@ pub fn heartbeat_period(report_interval: SignedDuration) -> Duration {
 }
 
 pub fn spawn(store: Store, cfg: Arc<ServerConfig>, started: Timestamp) {
+    spawn_probes(store.clone(), cfg.clone());
     let beat = store.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(heartbeat_period(cfg.report_interval));
@@ -38,6 +40,29 @@ pub fn spawn(store: Store, cfg: Arc<ServerConfig>, started: Timestamp) {
             tick.tick().await;
             if let Err(e) = store.call(|c| maintain(c, Timestamp::now())).await {
                 tracing::error!("maintenance: {e:#}");
+            }
+        }
+    });
+}
+
+/// Probes every endpoint once per report interval. Runs with no endpoints too, so the
+/// incidents of endpoints removed from the configuration are retired.
+fn spawn_probes(store: Store, cfg: Arc<ServerConfig>) {
+    let prober = match Prober::new(probe::TIMEOUT) {
+        Ok(p) => Arc::new(p),
+        Err(e) => return tracing::error!("probes disabled, no HTTP client: {e:#}"),
+    };
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(cfg.report_interval.unsigned_abs());
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let probed = prober.all(&cfg.endpoints).await;
+            let cfg = cfg.clone();
+            let run =
+                store.call(move |c| probes_once(c, &cfg.endpoints, &probed, Timestamp::now()));
+            if let Err(e) = run.await {
+                tracing::error!("probes: {e:#}");
             }
         }
     });

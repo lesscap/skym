@@ -12,10 +12,14 @@ pub fn full(subject: &Subject) -> String {
     }
 }
 
-/// Without a project that says nothing: `-` (outside compose) and `_systemd`.
+/// Without a project that says nothing (`-` outside compose, `_systemd`) or a URL's scheme.
 pub fn short(subject: &Subject) -> String {
     match subject {
         Subject::Workload(k) if k.project == "-" || k.project == "_systemd" => k.service.clone(),
+        Subject::Endpoint(url) => {
+            let bare = url.split_once("://").map_or(url.as_str(), |(_, rest)| rest);
+            bare.strip_suffix('/').unwrap_or(bare).to_string()
+        }
         other => full(other),
     }
 }
@@ -24,7 +28,15 @@ pub fn short(subject: &Subject) -> String {
 pub fn service(subject: &Subject) -> String {
     match subject {
         Subject::Workload(k) => k.service.clone(),
-        other => full(other),
+        other => short(other),
+    }
+}
+
+/// How the overview's left pane names a host or an endpoint.
+pub fn target(subject: &Subject) -> String {
+    match subject {
+        Subject::Host(h) => h.clone(),
+        other => short(other),
     }
 }
 
@@ -44,5 +56,14 @@ mod tests {
         assert_eq!(named("workload:x/_systemd/xray"), triple("_systemd/xray", "xray", "xray"));
         assert_eq!(named("mount:x:/data"), triple("/data", "/data", "/data"));
         assert_eq!(named("host:x"), triple("host", "host", "host"));
+        let url = "https://shop.example.com/";
+        assert_eq!(
+            named(&format!("endpoint:{url}")),
+            triple(url, "shop.example.com", "shop.example.com")
+        );
+        let path = "http://10.0.0.5:8080/healthz";
+        assert_eq!(named(&format!("endpoint:{path}")).1, "10.0.0.5:8080/healthz");
+        assert_eq!(target(&"host:x".parse().unwrap()), "x");
+        assert_eq!(target(&format!("endpoint:{url}").parse().unwrap()), "shop.example.com");
     }
 }

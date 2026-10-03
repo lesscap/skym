@@ -17,6 +17,8 @@ anyhow = "1"
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 jiff.workspace = true
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde.workspace = true
@@ -27,6 +29,7 @@ toml = "1"
 tower-http = { version = "0.6", features = ["decompression-gzip", "limit", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x509-cert = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 skym-core = { path = "../core", features = ["fixtures"] }

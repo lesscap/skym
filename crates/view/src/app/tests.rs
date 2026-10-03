@@ -1,6 +1,7 @@
 use super::*;
 use skym_core::rules::{IncidentCode, Severity};
-use skym_core::view::{CustomerOverview, HostOverview, IncidentView, Status};
+use skym_core::subject::Subject;
+use skym_core::view::{CustomerOverview, EndpointOverview, HostOverview, IncidentView, Status};
 use std::collections::BTreeMap;
 
 fn t(sec: i64) -> Timestamp {
@@ -44,6 +45,7 @@ fn overview() -> Overview {
                 host("x", vec![incident("workload:x/app/api")]),
                 host("y", vec![incident("host:y")]),
             ],
+            endpoints: vec![],
         }],
         muted_count: 0,
     }
@@ -103,7 +105,7 @@ fn picking_a_host_narrows_the_problems() {
     let mut app = loaded();
     assert_eq!(app.problem_rows(t(2)).len(), 2);
     press(&mut app, &[Key::Down, Key::Down]);
-    assert_eq!(app.picked_host().map(String::as_str), Some("y"));
+    assert_eq!(app.picked(), Some(Subject::Host("y".into())));
     assert_eq!(app.problem_rows(t(2)).iter().map(|r| r.host).collect::<Vec<_>>(), ["y"]);
     press(&mut app, &[Key::Down]);
     assert_eq!(app.host_cursor, 2, "the last host is the bottom");
@@ -150,7 +152,7 @@ fn filter_toggles_and_help() {
     assert_eq!(app.filter.as_deref(), Some("API"));
     let rows = app.problem_rows(t(2));
     assert_eq!(rows.len(), 1, "case-insensitive, by the name shown");
-    assert_eq!(app.host_ids().len(), 2, "the other pane is not filtered");
+    assert_eq!(app.targets().len(), 2, "the other pane is not filtered");
     press(&mut app, &[Key::Char('q')]);
     assert!(app.quit, "typing ended with enter, so q quits");
     let mut app = loaded();
@@ -284,7 +286,7 @@ fn filtering_hosts_keeps_the_pick_within_the_list_and_ctrl_c_quits() {
     press(&mut app, &[Key::Down, Key::Down]);
     assert_eq!(app.host_cursor, 2);
     press(&mut app, &[Key::Char('/'), Key::Char('x')]);
-    assert_eq!(app.host_ids(), ["x"]);
+    assert_eq!(app.targets(), [Subject::Host("x".into())]);
     assert_eq!(app.host_cursor, 1, "clamped to the shorter list");
     press(&mut app, &[Key::Quit]);
     assert!(app.quit && app.filter.as_deref() == Some("x"), "quits even while typing");
@@ -307,4 +309,47 @@ fn when_skym_started_watching_comes_from_the_overview() {
     assert_eq!(app.observed_since("x"), Some(t(0)));
     assert_eq!(app.observed_since("nowhere"), None);
     assert_eq!(App::default().observed_since("x"), None);
+}
+
+/// The overview with one endpoint down after the hosts.
+fn with_endpoint() -> App {
+    let mut o = overview();
+    let url = "https://shop.example.com/";
+    o.customers[0].endpoints = vec![EndpointOverview {
+        url: url.into(),
+        status: Status::Critical,
+        last_probe_ago: Some("20s".into()),
+        observed_since: Some(t(0)),
+        http_status: Some(503),
+        latency_ms: Some(80),
+        cert_expires_at: None,
+        incidents: vec![incident(&format!("endpoint:{url}"))],
+    }];
+    let mut app = App::default();
+    update(&mut app, Msg::Fetched(Request::Overview, Ok(Box::new(Payload::Overview(o)))), t(1));
+    app
+}
+
+#[test]
+fn endpoints_follow_the_hosts_and_open_nothing() {
+    let mut app = with_endpoint();
+    let endpoint = Subject::Endpoint("https://shop.example.com/".into());
+    assert_eq!(app.targets()[2], endpoint);
+    press(&mut app, &[Key::Down, Key::Down, Key::Down]);
+    assert_eq!(app.picked(), Some(endpoint));
+    assert_eq!(app.problem_rows(t(2)).len(), 1, "only the endpoint's problem");
+    assert!(press(&mut app, &[Key::Enter]).is_empty(), "an endpoint has no screen");
+    press(&mut app, &[Key::Tab]);
+    assert!(press(&mut app, &[Key::Enter]).is_empty(), "nor does its problem");
+    assert_eq!(app.stack.len(), 1);
+}
+
+#[test]
+fn the_hosts_filter_finds_endpoints_by_their_address() {
+    let mut app = with_endpoint();
+    press(
+        &mut app,
+        &[Key::Char('/'), Key::Char('s'), Key::Char('h'), Key::Char('o'), Key::Char('p')],
+    );
+    assert_eq!(app.targets(), [Subject::Endpoint("https://shop.example.com/".into())]);
 }

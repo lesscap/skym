@@ -2,11 +2,13 @@
 
 use anyhow::{Context, bail};
 use jiff::{SignedDuration, Timestamp};
+use reqwest::header::{HeaderName, HeaderValue};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use skym_core::rules::IncidentCode;
 use skym_core::subject::{CustomerId, HostId, Subject};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -21,6 +23,7 @@ pub struct ServerConfig {
     pub hosts: Vec<HostEntry>,
     pub readers: Vec<Reader>,
     pub mute: Vec<Mute>,
+    pub endpoints: Vec<Endpoint>,
 }
 
 impl Default for ServerConfig {
@@ -33,6 +36,7 @@ impl Default for ServerConfig {
             hosts: Vec::new(),
             readers: Vec::new(),
             mute: Vec::new(),
+            endpoints: Vec::new(),
         }
     }
 }
@@ -64,6 +68,29 @@ pub struct Mute {
     pub until: Option<Timestamp>,
 }
 
+/// A URL the server probes. `expect` replaces the default "below 400" when set; `headers`
+/// may hold a token for the probe, so their values never leave the configuration.
+#[derive(Deserialize, Clone)]
+pub struct Endpoint {
+    pub url: String,
+    pub customer: CustomerId,
+    #[serde(default)]
+    pub expect: Vec<u16>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for Endpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Endpoint")
+            .field("url", &self.url)
+            .field("customer", &self.customer)
+            .field("expect", &self.expect)
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
 pub fn load(path: &Path) -> anyhow::Result<ServerConfig> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
@@ -71,12 +98,19 @@ pub fn load(path: &Path) -> anyhow::Result<ServerConfig> {
 }
 
 pub fn parse(text: &str) -> anyhow::Result<ServerConfig> {
-    let cfg: ServerConfig = toml::from_str(text)?;
+    // The parser's own message quotes the offending line, which may hold a probe token.
+    let cfg: ServerConfig = toml::from_str(text).map_err(|e| {
+        let line = e.span().map(|s| text[..s.start].lines().count().max(1));
+        anyhow::anyhow!("{} (line {})", e.message(), line.map_or("?".into(), |l| l.to_string()))
+    })?;
     validate(&cfg)?;
     Ok(cfg)
 }
 
 fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
+    if !cfg.report_interval.is_positive() {
+        bail!("report_interval must be positive");
+    }
     let customers: BTreeSet<&str> = cfg.customers.iter().map(|c| c.id.as_str()).collect();
     let mut ids = BTreeSet::new();
     for h in &cfg.hosts {
@@ -104,7 +138,40 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
     if let Some(m) = cfg.mute.iter().find(|m| m.code == IncidentCode::Unknown) {
         bail!("mute for {} names an unknown incident code", m.subject);
     }
+    let mut urls = BTreeSet::new();
+    for e in &cfg.endpoints {
+        let url = validate_endpoint(e, &customers)?;
+        if !urls.insert(url) {
+            bail!("endpoint {} is listed twice", e.url);
+        }
+    }
     Ok(())
+}
+
+/// The URL as parsed: `https://a.example` and `https://a.example/` are one endpoint.
+fn validate_endpoint(e: &Endpoint, customers: &BTreeSet<&str>) -> anyhow::Result<reqwest::Url> {
+    let url = reqwest::Url::parse(&e.url).with_context(|| format!("endpoint {}", e.url))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        bail!("endpoint {} is not an http(s) URL with a host", e.url);
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("endpoint {} has credentials in the URL; use headers", e.url);
+    }
+    if !customers.contains(e.customer.as_str()) {
+        bail!("endpoint {} names unknown customer {:?}", e.url, e.customer);
+    }
+    if let Some(s) = e.expect.iter().find(|s| !(100..=599).contains(*s)) {
+        bail!("endpoint {} expects {s}, which is not an HTTP status", e.url);
+    }
+    for (name, value) in &e.headers {
+        HeaderName::from_bytes(name.as_bytes())
+            .with_context(|| format!("endpoint {}: header name {name:?}", e.url))?;
+        // The value is a secret: never in an error message.
+        HeaderValue::from_str(value).map_err(|_| {
+            anyhow::anyhow!("endpoint {}: header {name} has an invalid value", e.url)
+        })?;
+    }
+    Ok(url)
 }
 
 pub fn sha256_hex(s: &str) -> String {
@@ -159,10 +226,60 @@ mod tests {
             config(&(host("x", "acme", &hash('a')) + &reader_same)),
             config("[[mute]]\nsubject = \"nonsense\"\ncode = \"WORKLOAD_DOWN\"\n"),
             config("[[mute]]\nsubject = \"host:x\"\ncode = \"NOT_A_CODE\"\n"),
+            format!("report_interval = \"0s\"\n{}", config("")),
         ];
         for (i, text) in cases.iter().enumerate() {
             assert!(parse(text).is_err(), "case {i} should be rejected");
         }
+    }
+
+    fn endpoint(fields: &str) -> String {
+        config(&format!("[[endpoints]]\ncustomer = \"acme\"\n{fields}\n"))
+    }
+
+    #[test]
+    fn endpoints_parse_and_keep_their_headers_out_of_debug() {
+        let cfg = parse(&endpoint(
+            "url = \"https://shop.example.com/healthz\"\nexpect = [401]\nheaders = { Authorization = \"Bearer s3cret\" }",
+        ))
+        .unwrap();
+        let e = &cfg.endpoints[0];
+        assert_eq!(
+            (e.expect.as_slice(), e.headers["Authorization"].as_str()),
+            ([401].as_slice(), "Bearer s3cret")
+        );
+        let shown = format!("{cfg:?}");
+        assert!(shown.contains("Authorization") && !shown.contains("s3cret"), "{shown}");
+        assert!(parse(&endpoint("url = \"http://10.0.0.5:8080/\"")).is_ok());
+    }
+
+    #[test]
+    fn invalid_endpoints_are_rejected() {
+        let cases = [
+            endpoint("url = \"not a url\""),
+            endpoint("url = \"ftp://shop.example.com/\""),
+            endpoint("url = \"https://user:pw@shop.example.com/\""),
+            endpoint("url = \"https://user@shop.example.com/\""),
+            endpoint("url = \"https://shop.example.com/\"\nexpect = [99]"),
+            endpoint("url = \"https://shop.example.com/\"\nexpect = [600]"),
+            endpoint("url = \"https://shop.example.com/\"\nheaders = { \"Bad Name\" = \"x\" }"),
+            endpoint("url = \"https://shop.example.com/\"\nheaders = { X-Token = \"a\\nb\" }"),
+            config("[[endpoints]]\nurl = \"https://a.example/\"\ncustomer = \"nobody\"\n"),
+            endpoint(
+                "url = \"https://a.example\"\n[[endpoints]]\nurl = \"https://a.example/\"\ncustomer = \"acme\"",
+            ),
+        ];
+        for text in &cases {
+            assert!(parse(text).is_err(), "should be rejected:\n{text}");
+        }
+        let broken = endpoint("url = \"https://a.example/\"\nheaders = { X-Token = \"s3cret\" ");
+        let err = parse(&broken).unwrap_err();
+        assert!(!format!("{err:#}").contains("s3cret"), "a syntax error does not quote the line");
+        assert!(format!("{err:#}").contains("(line "), "{err:#}");
+        let err =
+            parse(&endpoint("url = \"https://a.example/\"\nheaders = { X-Token = \"s3cret\\n\" }"))
+                .unwrap_err();
+        assert!(!format!("{err:#}").contains("s3cret"), "a bad value is never echoed");
     }
 
     #[test]

@@ -13,6 +13,7 @@ A small `skym` binary runs on every host. It checks the host, its containers and
 | Datastores | Postgres, MySQL and Redis containers answering a local probe; Postgres replication lag |
 | systemd units | declared services running and listening on their ports |
 | Applications | exceptions they write to stdout or stderr, grouped by component and code |
+| Endpoints | configured URLs, probed by the server: answering as expected, and certificates close to expiry |
 
 Thresholds, severities, and when an incident opens or resolves are decided by skym, not by whoever reads the result: see the [judgement rules](docs/judgement.md).
 
@@ -129,7 +130,7 @@ Under development; no releases yet.
 | `skym agent`, `skym doctor` | Working: reports every interval, buffers and replays while the server is away |
 | `skym-server` | Working: report ingest, incidents, heartbeat loss, disk projection, query API |
 | `skym-view` | Working: a terminal view of the server for people (read-only) |
-| Endpoint and TLS probes | Next |
+| Endpoint and TLS probes | Working: configured URLs, optional probe tokens, certificate expiry |
 | Releases, notifications | Later |
 
 ## License

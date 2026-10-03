@@ -133,6 +133,26 @@ pub struct HostOverview {
     pub links: BTreeMap<String, String>,
 }
 
+/// A URL the server probes. `Unknown` until its first probe.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct EndpointOverview {
+    pub url: String,
+    pub status: Status,
+    pub last_probe_ago: Option<String>,
+    /// When skym first probed it: incidents open about that long may be older.
+    #[serde(default)]
+    pub observed_since: Option<Timestamp>,
+    /// The last answer's HTTP status and how long it took; `None` when there was no answer.
+    #[serde(default)]
+    pub http_status: Option<u16>,
+    #[serde(default)]
+    pub latency_ms: Option<u64>,
+    #[serde(default)]
+    pub cert_expires_at: Option<Timestamp>,
+    #[serde(default)]
+    pub incidents: Vec<IncidentView>,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct CustomerOverview {
     pub id: CustomerId,
@@ -140,6 +160,8 @@ pub struct CustomerOverview {
     pub status: Status,
     #[serde(default)]
     pub hosts: Vec<HostOverview>,
+    #[serde(default)]
+    pub endpoints: Vec<EndpointOverview>,
 }
 
 /// `GET /api/overview`: where is something wrong right now.

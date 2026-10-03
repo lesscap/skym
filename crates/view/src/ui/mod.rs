@@ -87,10 +87,15 @@ fn top_bar(app: &App, server: &str, now: Timestamp, theme: Theme) -> Paragraph<'
         Span::raw(format!(" · {host}   ")),
     ];
     if let Some(o) = &app.overview.value {
-        let hosts: Vec<Status> =
-            o.customers.iter().flat_map(|c| &c.hosts).map(|h| h.status).collect();
+        let targets: Vec<Status> = o
+            .customers
+            .iter()
+            .flat_map(|c| {
+                c.hosts.iter().map(|h| h.status).chain(c.endpoints.iter().map(|e| e.status))
+            })
+            .collect();
         for status in [Status::Critical, Status::Unknown, Status::Warn, Status::Ok] {
-            let n = hosts.iter().filter(|s| **s == status).count();
+            let n = targets.iter().filter(|s| **s == status).count();
             if n > 0 {
                 let name = format!("{status:?}").to_lowercase();
                 spans.extend([theme.status(status), Span::raw(format!(" {n} {name}   "))]);

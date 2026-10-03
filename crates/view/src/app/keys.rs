@@ -23,11 +23,15 @@ impl App {
     fn enter(&mut self, now: Timestamp) -> Vec<Request> {
         let cursor = self.frame().cursor;
         let target = match (&self.frame().screen, self.pane) {
-            (Screen::Overview, Pane::Hosts) => self.picked_host().cloned().map(Screen::Host),
+            (Screen::Overview, Pane::Hosts) => match self.picked() {
+                Some(Subject::Host(h)) => Some(Screen::Host(h)),
+                _ => None, // an endpoint has no screen of its own
+            },
             (Screen::Overview, Pane::Problems) => {
-                self.problem_rows(now).get(cursor).map(|r| match &r.incident.subject {
-                    Subject::Workload(k) => Screen::Workload(k.clone()),
-                    _ => Screen::Host(r.host.to_string()),
+                self.problem_rows(now).get(cursor).and_then(|r| match &r.incident.subject {
+                    Subject::Workload(k) => Some(Screen::Workload(k.clone())),
+                    Subject::Endpoint(_) => None,
+                    _ => Some(Screen::Host(r.host.to_string())),
                 })
             }
             (Screen::Host(_), _) => {

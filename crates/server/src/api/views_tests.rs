@@ -1,5 +1,6 @@
 use super::*;
-use crate::config::{Customer, HostEntry};
+use crate::config::{Customer, Endpoint, HostEntry};
+use crate::probe::Probe;
 use skym_core::model::EventKind;
 use skym_core::rules::{IncidentCode, Severity};
 
@@ -128,7 +129,7 @@ fn overview_ranks_hosts_and_ignores_muted_incidents() {
             at(5),
         ),
     ];
-    let o = overview(&cfg, &seen, &open, at(5));
+    let o = overview(&cfg, &seen, &BTreeMap::new(), &open, at(5));
     let hosts: Vec<(&str, Status)> =
         o.customers[0].hosts.iter().map(|h| (h.id.as_str(), h.status)).collect();
     assert_eq!(
@@ -148,8 +149,76 @@ fn overview_ranks_hosts_and_ignores_muted_incidents() {
         "info is listed, not counted"
     );
     assert_eq!(o.customers[0].hosts[0].observed_since, Some(at(-60)));
-    let calm = overview(&cfg, &seen, &open[2..], at(5));
+    let calm = overview(&cfg, &seen, &BTreeMap::new(), &open[2..], at(5));
     assert_eq!(calm.status, Status::Unknown, "a host that never reported outranks warnings");
+}
+
+#[test]
+fn endpoints_list_under_their_customer_and_count_to_its_status() {
+    let endpoint = |url: &str, customer: &str| Endpoint {
+        url: url.into(),
+        customer: customer.into(),
+        expect: vec![],
+        headers: BTreeMap::new(),
+    };
+    let cfg = ServerConfig {
+        customers: vec![
+            Customer { id: "acme".into(), name: "Acme".into() },
+            Customer { id: "zeta".into(), name: "Zeta".into() },
+        ],
+        endpoints: vec![
+            endpoint("https://a.example", "acme"),
+            endpoint("https://b.example", "acme"),
+            endpoint("https://new.example", "acme"),
+            endpoint("https://stale.example", "acme"),
+            endpoint("https://edge.example", "acme"),
+            endpoint("https://z.example", "zeta"),
+        ],
+        ..ServerConfig::default()
+    };
+    let row = |url: &str, response: Result<u16, String>| {
+        let probe =
+            Probe { at: at(4), response, latency_ms: 120, cert_not_after: Some(at(60 * 24 * 30)) };
+        (url.to_string(), ProbeRow { url: url.into(), first_seen: at(-60), probe })
+    };
+    let mut stale = row("https://stale.example", Ok(200));
+    stale.1.probe.at = at(-60);
+    let mut edge = row("https://edge.example", Ok(200));
+    edge.1.probe.at = at(2);
+    let probes = BTreeMap::from([
+        stale,
+        edge,
+        row("https://a.example", Ok(200)),
+        row("https://b.example", Err("timeout after 10s".into())),
+        row("https://z.example", Ok(200)),
+    ]);
+    let down =
+        incident("endpoint:https://b.example", IncidentCode::EndpointDown, Severity::Critical);
+    let open = [incident_view(&down, &[], &BTreeMap::new(), at(5))];
+    let o = overview(&cfg, &BTreeMap::new(), &probes, &open, at(5));
+    let acme: Vec<(&str, Status)> =
+        o.customers[0].endpoints.iter().map(|e| (e.url.as_str(), e.status)).collect();
+    assert_eq!(
+        acme,
+        [
+            ("https://b.example", Status::Critical),
+            ("https://new.example", Status::Unknown),
+            ("https://stale.example", Status::Unknown),
+            ("https://a.example", Status::Ok),
+            ("https://edge.example", Status::Ok),
+        ],
+        "most urgent first; never or not lately probed is unknown"
+    );
+    assert_eq!((o.customers[0].status, o.customers[1].status), (Status::Critical, Status::Ok));
+    assert_eq!(o.customers[1].endpoints.len(), 1);
+    let (b, a) = (&o.customers[0].endpoints[0], &o.customers[0].endpoints[3]);
+    assert_eq!(b.incidents.len(), 1);
+    assert_eq!((b.http_status, b.latency_ms, b.cert_expires_at), (None, None, None), "no answer");
+    assert_eq!(
+        (a.http_status, a.latency_ms, a.cert_expires_at, a.observed_since),
+        (Some(200), Some(120), Some(at(60 * 24 * 30)), Some(at(-60)))
+    );
+    assert_eq!(a.last_probe_ago.as_deref(), Some("1m"));
 }
 
 #[test]

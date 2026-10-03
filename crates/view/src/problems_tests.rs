@@ -1,6 +1,6 @@
 use super::*;
 use skym_core::rules::IncidentCode;
-use skym_core::view::{CustomerOverview, HostOverview, Status};
+use skym_core::view::{CustomerOverview, EndpointOverview, HostOverview, Status};
 use std::collections::BTreeMap;
 
 fn t(min: i64) -> Timestamp {
@@ -42,6 +42,7 @@ fn overview(x: Vec<IncidentView>, y: Vec<IncidentView>) -> Overview {
             name: "Acme".into(),
             status: Status::Critical,
             hosts: vec![host("x", 0, x), host("y", 60, y)],
+            endpoints: vec![],
         }],
         muted_count: 0,
     }
@@ -108,7 +109,7 @@ fn worst_then_longest_first_with_hygiene_apart_and_a_host_filter() {
     assert_eq!(subjects(&p.new), ["workload:x/a/short"], "opened after the baseline");
     assert_eq!(subjects(&p.ongoing), ["workload:y/a/long", "workload:x/a/warn"], "critical first");
     assert_eq!(subjects(&p.info), ["host:x"]);
-    let only_x = problems(&o, &[], Some("x"), t(240));
+    let only_x = problems(&o, &[], Some(&Subject::Host("x".into())), t(240));
     assert!(only_x.ongoing.iter().chain(&only_x.info).all(|r| r.host == "x"));
 }
 
@@ -122,7 +123,46 @@ fn muted_incidents_join_only_when_given() {
     let mut elsewhere = incident("workload:y/a/legacy", Severity::Critical, 61);
     elsewhere.muted = true;
     let given = [given[0].clone(), given[1].clone(), elsewhere];
-    let p = problems(&o, &given, Some("x"), t(70));
+    let p = problems(&o, &given, Some(&Subject::Host("x".into())), t(70));
     assert_eq!(subjects(&p.ongoing), ["workload:x/a/legacy"], "the overview already has unmuted");
     assert!(problems(&o, &[], None, t(10)).ongoing.is_empty());
+}
+
+#[test]
+fn endpoints_list_with_the_hosts_and_can_be_picked_alone() {
+    let url = "https://shop.example.com/";
+    let mut o = overview(vec![incident("workload:x/a/api", Severity::Critical, 1)], vec![]);
+    let mut down = incident(&format!("endpoint:{url}"), Severity::Critical, 100);
+    down.code = IncidentCode::EndpointDown;
+    o.customers[0].endpoints = vec![EndpointOverview {
+        url: url.into(),
+        status: Status::Critical,
+        last_probe_ago: Some("20s".into()),
+        observed_since: Some(t(0)),
+        http_status: None,
+        latency_ms: None,
+        cert_expires_at: None,
+        incidents: vec![down.clone()],
+    }];
+    let p = problems(&o, &[], None, t(120));
+    assert_eq!(subjects(&p.new), [format!("endpoint:{url}")], "new by the endpoint's own watch");
+    assert_eq!(
+        (p.new[0].host, p.new[0].age),
+        (ENDPOINT, Age::Exact(SignedDuration::from_mins(20)))
+    );
+    assert_eq!(subjects(&p.ongoing), ["workload:x/a/api"]);
+    let only = problems(&o, &[], Some(&Subject::Endpoint(url.into())), t(120));
+    assert_eq!((only.new.len(), only.ongoing.len()), (1, 0), "picking it hides the hosts");
+    let only_x = problems(&o, &[], Some(&Subject::Host("x".into())), t(120));
+    assert!(only_x.new.is_empty(), "and picking a host hides it");
+    let mut quiet = down.clone();
+    quiet.muted = true;
+    o.customers[0].endpoints[0].incidents.clear();
+    let given = [quiet, down];
+    let shown = problems(&o, &given, None, t(120));
+    assert_eq!(
+        subjects(&shown.new),
+        [format!("endpoint:{url}")],
+        "a muted one shows when asked; the unmuted one is the overview's to list"
+    );
 }

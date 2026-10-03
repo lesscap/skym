@@ -1,9 +1,12 @@
 //! Findings → incidents, for one scope. Ingest evaluates a host's own subjects; the
-//! heartbeat task evaluates `HEARTBEAT_LOST`; the two never resolve each other's incidents.
+//! heartbeat task evaluates `HEARTBEAT_LOST`; the probe task evaluates endpoints. None of
+//! them resolves another's incidents.
 
+use crate::config::Endpoint;
 use crate::findings;
 use crate::lifecycle::{self, Incident};
-use crate::store::{hosts, incidents};
+use crate::probe::Probe;
+use crate::store::{hosts, incidents, probes};
 use jiff::{SignedDuration, Timestamp};
 use rusqlite::Connection;
 use skym_core::rules::{Finding, IncidentCode, rule};
@@ -57,6 +60,39 @@ pub fn heartbeat_once(
     let observed = |s: &Subject, _| {
         let seen = s.host().and_then(|h| seen.get(h).copied());
         !findings::in_grace(seen, started, interval, now)
+    };
+    apply(&tx, &found, &active, observed, now)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// One probe pass over the configured endpoints; `probed` may miss some (not seen this pass).
+/// Incidents of endpoints no longer configured are retired. A certificate is only judged when
+/// the endpoint answered.
+pub fn probes_once(
+    conn: &mut Connection,
+    configured: &[Endpoint],
+    probed: &[(Endpoint, Probe)],
+    now: Timestamp,
+) -> anyhow::Result<()> {
+    let tx = conn.transaction()?;
+    let probed: BTreeMap<Subject, (&Endpoint, &Probe)> =
+        probed.iter().map(|(e, p)| (Subject::Endpoint(e.url.clone()), (e, p))).collect();
+    for (e, p) in probed.values() {
+        probes::save(&tx, &e.url, p)?;
+    }
+    let urls: Vec<&str> = configured.iter().map(|e| e.url.as_str()).collect();
+    probes::prune(&tx, &urls)?;
+    let (active, gone): (Vec<Incident>, Vec<Incident>) = incidents::active_endpoints(&tx)?
+        .into_iter()
+        .partition(|i| matches!(&i.subject, Subject::Endpoint(u) if urls.contains(&u.as_str())));
+    for i in &gone {
+        incidents::apply(&tx, &lifecycle::retire(i, now), now)?;
+    }
+    let found: Vec<Finding> =
+        probed.values().flat_map(|(e, p)| findings::endpoint(&e.url, &e.expect, p)).collect();
+    let observed = |s: &Subject, code| {
+        probed.get(s).is_some_and(|(_, p)| code != IncidentCode::CertExpiring || p.response.is_ok())
     };
     apply(&tx, &found, &active, observed, now)?;
     tx.commit()?;

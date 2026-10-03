@@ -1,5 +1,6 @@
-//! Findings only the server can make, from history: lost heartbeats and disk projection.
+//! Findings only the server can make: lost heartbeats, disk projection and probes.
 
+use crate::probe::Probe;
 use jiff::{SignedDuration, Timestamp};
 use skym_core::rules::{Finding, IncidentCode, Severity};
 use skym_core::subject::{HostId, Subject};
@@ -73,6 +74,57 @@ pub fn projection(
     let (week, day) = (SignedDuration::from_hours(24 * 7), SignedDuration::from_hours(24));
     let matched = if open { full_in <= week } else { full_in < week };
     matched.then(|| (if full_in < day { Severity::Critical } else { Severity::Warn }, full_in))
+}
+
+/// What one probe says: an endpoint down or answering otherwise than expected, and a
+/// certificate close to its expiry.
+pub fn endpoint(url: &str, expect: &[u16], p: &Probe) -> Vec<Finding> {
+    let finding = |code, (severity, detail)| Finding {
+        subject: Subject::Endpoint(url.to_string()),
+        code,
+        severity,
+        detail,
+    };
+    let down = match &p.response {
+        Err(why) => Some((Severity::Critical, why.clone())),
+        Ok(status) => answer(*status, expect),
+    };
+    let cert = p.cert_not_after.and_then(|t| expiring(t, p.at));
+    down.map(|d| finding(IncidentCode::EndpointDown, d))
+        .into_iter()
+        .chain(cert.map(|c| finding(IncidentCode::CertExpiring, c)))
+        .collect()
+}
+
+/// `None` when the status is the one expected (by default, anything below 400).
+fn answer(status: u16, expect: &[u16]) -> Option<(Severity, String)> {
+    let good = if expect.is_empty() { status < 400 } else { expect.contains(&status) };
+    if good {
+        return None;
+    }
+    let reason = reqwest::StatusCode::from_u16(status).ok().and_then(|s| s.canonical_reason());
+    let mut detail = reason.map_or_else(|| status.to_string(), |r| format!("{status} {r}"));
+    if !expect.is_empty() {
+        let expected: Vec<String> = expect.iter().map(u16::to_string).collect();
+        detail = format!("{detail}, expected {}", expected.join(" or "));
+    }
+    let severity = if status >= 500 { Severity::Critical } else { Severity::Warn };
+    Some((severity, detail))
+}
+
+fn expiring(not_after: Timestamp, now: Timestamp) -> Option<(Severity, String)> {
+    let left = not_after.duration_since(now);
+    let day = SignedDuration::from_hours(24);
+    if left > day * 14 {
+        return None;
+    }
+    let date = not_after.strftime("%Y-%m-%d");
+    let detail = if left.is_negative() {
+        format!("certificate expired {date}")
+    } else {
+        format!("certificate expires {date} (in {})", format_duration(left))
+    };
+    Some((if left <= day * 7 { Severity::Critical } else { Severity::Warn }, detail))
 }
 
 /// One finding per `(subject, code)`: the highest severity, details joined.
@@ -179,6 +231,78 @@ mod tests {
             projection(&samples, full_in(86_400 * 7), true).is_some(),
             "an open incident holds at 7 days"
         );
+    }
+
+    fn probe(response: Result<u16, &str>, cert_in_days: Option<i64>) -> Probe {
+        Probe {
+            at: at(0),
+            response: response.map_err(str::to_string),
+            latency_ms: 40,
+            cert_not_after: cert_in_days.map(|d| at(d * 86_400)),
+        }
+    }
+
+    fn judged(expect: &[u16], p: &Probe) -> Vec<(IncidentCode, Severity, String)> {
+        endpoint("https://shop.example.com", expect, p)
+            .into_iter()
+            .map(|f| (f.code, f.severity, f.detail))
+            .collect()
+    }
+
+    #[test]
+    fn an_endpoint_is_down_on_errors_and_unexpected_statuses() {
+        let down = |sev, detail: &str| vec![(IncidentCode::EndpointDown, sev, detail.to_string())];
+        assert_eq!(judged(&[], &probe(Ok(200), None)), []);
+        assert_eq!(judged(&[], &probe(Ok(302), None)), [], "a redirect is an answer");
+        assert_eq!(judged(&[], &probe(Ok(399), None)), []);
+        assert_eq!(judged(&[], &probe(Ok(400), None)), down(Severity::Warn, "400 Bad Request"));
+        assert_eq!(judged(&[], &probe(Ok(404), None)), down(Severity::Warn, "404 Not Found"));
+        assert_eq!(judged(&[], &probe(Ok(499), None)), down(Severity::Warn, "499"));
+        assert_eq!(
+            judged(&[], &probe(Ok(500), None)),
+            down(Severity::Critical, "500 Internal Server Error")
+        );
+        assert_eq!(
+            judged(&[], &probe(Err("timeout after 10s"), None)),
+            down(Severity::Critical, "timeout after 10s")
+        );
+    }
+
+    #[test]
+    fn expect_replaces_the_default() {
+        assert_eq!(judged(&[401], &probe(Ok(401), None)), []);
+        assert_eq!(
+            judged(&[401, 403], &probe(Ok(200), None)),
+            [(IncidentCode::EndpointDown, Severity::Warn, "200 OK, expected 401 or 403".into())]
+        );
+        assert_eq!(judged(&[401], &probe(Ok(503), None))[0].1, Severity::Critical);
+    }
+
+    #[test]
+    fn certificates_warn_two_weeks_ahead_and_turn_critical_in_the_last_week() {
+        let cert = |days| judged(&[], &probe(Ok(200), Some(days)));
+        let at_day = |d: i64| at(d * 86_400).strftime("%Y-%m-%d").to_string();
+        assert_eq!(cert(15), []);
+        assert_eq!(
+            cert(14),
+            [(
+                IncidentCode::CertExpiring,
+                Severity::Warn,
+                format!("certificate expires {} (in 14d)", at_day(14))
+            )]
+        );
+        assert_eq!(cert(8)[0].1, Severity::Warn);
+        assert_eq!(cert(7)[0].1, Severity::Critical);
+        assert_eq!(
+            cert(-1),
+            [(
+                IncidentCode::CertExpiring,
+                Severity::Critical,
+                format!("certificate expired {}", at_day(-1))
+            )]
+        );
+        let both = judged(&[], &probe(Ok(503), Some(1)));
+        assert_eq!(both.len(), 2, "down and expiring are separate incidents");
     }
 
     #[test]

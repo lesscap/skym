@@ -8,5 +8,6 @@ pub mod evaluate;
 pub mod findings;
 pub mod ingest;
 pub mod lifecycle;
+pub mod probe;
 pub mod store;
 pub mod tasks;

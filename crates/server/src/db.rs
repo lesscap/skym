@@ -102,6 +102,19 @@ UPDATE hosts SET first_seen = MIN(last_seen,
   COALESCE((SELECT MIN(first_match_at) FROM incidents WHERE host = hosts.id), last_seen),
   COALESCE((SELECT MIN(ts) FROM events WHERE host = hosts.id), last_seen));
 "#,
+    // The latest probe of each configured endpoint; the incident log keeps the history.
+    r#"
+CREATE TABLE probes (
+  url            TEXT PRIMARY KEY,
+  first_seen     TEXT NOT NULL,
+  at             TEXT NOT NULL,
+  status         INTEGER,
+  error          TEXT,
+  latency_ms     INTEGER NOT NULL,
+  cert_not_after TEXT,
+  CHECK ((status IS NULL) <> (error IS NULL))
+);
+"#,
 ];
 
 pub fn open(path: &Path) -> anyhow::Result<Connection> {

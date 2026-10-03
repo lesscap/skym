@@ -4,7 +4,7 @@ use crate::app::{Msg, update};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use skym_core::rules::IncidentCode;
-use skym_core::view::{CustomerOverview, HostOverview, IncidentView, Overview};
+use skym_core::view::{CustomerOverview, EndpointOverview, HostOverview, IncidentView, Overview};
 use std::collections::BTreeMap;
 
 fn t(min: i64) -> Timestamp {
@@ -54,6 +54,19 @@ fn overview_screen(theme: Theme, width: u16) -> Vec<String> {
             name: "Acme".into(),
             status: Status::Critical,
             hosts: vec![host],
+            endpoints: vec![
+                endpoint(
+                    "https://shop.example.com/",
+                    None,
+                    vec![incident(
+                        "endpoint:https://shop.example.com/",
+                        IncidentCode::EndpointDown,
+                        Severity::Critical,
+                        110,
+                    )],
+                ),
+                endpoint("https://api.example.com/healthz", Some(1234), vec![]),
+            ],
         }],
         muted_count: 0,
     };
@@ -64,6 +77,19 @@ fn overview_screen(theme: Theme, width: u16) -> Vec<String> {
         t(120),
     );
     render(&app, theme, width, 16)
+}
+
+fn endpoint(url: &str, latency_ms: Option<u64>, incidents: Vec<IncidentView>) -> EndpointOverview {
+    EndpointOverview {
+        url: url.into(),
+        status: if incidents.is_empty() { Status::Ok } else { Status::Critical },
+        last_probe_ago: Some("20s".into()),
+        observed_since: Some(t(0)),
+        http_status: latency_ms.map(|_| 200),
+        latency_ms,
+        cert_expires_at: None,
+        incidents,
+    }
 }
 
 fn render(app: &App, theme: Theme, width: u16, height: u16) -> Vec<String> {
@@ -98,7 +124,7 @@ fn without_color_the_symbols_still_tell_the_status() {
     let lines = screen(Theme { color: false });
     assert!(lines[line_of(&lines, " fresh ")].contains('✗'));
     assert!(lines[line_of(&lines, " x ")].contains('✗'), "the host's status");
-    line_of(&lines, "1 critical");
+    line_of(&lines, "2 critical");
 }
 
 #[test]
@@ -190,4 +216,17 @@ fn a_service_hides_its_muted_problems_unless_asked() {
     assert!(!shows(&app), "as on the overview, muted problems stay out of sight");
     update(&mut app, Msg::Key(Key::Char('m')), t(121));
     assert!(shows(&app));
+}
+
+#[test]
+fn endpoints_show_under_the_hosts_and_among_the_problems() {
+    let lines = screen(Theme { color: false });
+    let shop = line_of(&lines, "shop.examp…");
+    assert!(line_of(&lines, " x ") < shop, "after the customer's hosts");
+    assert!(lines[shop].contains('✗') && lines[shop].contains('—'), "down, no answer");
+    assert!(lines[line_of(&lines, "api.exampl…")].contains("1.2s"), "how fast it answered");
+    let problem = &lines[line_of(&lines, " endpoint ")];
+    assert!(problem.contains("shop.example.com") && problem.contains("ENDPOINT_DOWN detail"));
+    assert!(line_of(&lines, " endpoint ") < line_of(&lines, "ONGOING"), "a new problem");
+    line_of(&lines, "✗ 2 critical   ✓ 1 ok");
 }

@@ -1,7 +1,7 @@
 use super::views::{self, incident_view};
 use super::{ApiError, AppState, ReportingHost};
 use crate::ingest::{IngestError, MAX_AHEAD, ingest};
-use crate::store::{history, hosts, incidents};
+use crate::store::{history, hosts, incidents, probes};
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
@@ -72,21 +72,22 @@ fn workload_key(host: &str, workload: &str) -> Result<WorkloadKey, ApiError> {
 
 pub async fn overview(State(s): State<AppState>) -> ApiResult<Overview> {
     let now = Timestamp::now();
-    let (all, open, stopped) = s
+    let (all, probed, open, stopped) = s
         .store
         .call(|c| {
             let open = incidents::listed(c, true, None, None, Timestamp::UNIX_EPOCH, MAX_ROWS)?;
             let stopped = hosts::stopped_since(c, &open)?;
-            Ok((hosts::all(c)?, open, stopped))
+            Ok((hosts::all(c)?, probes::all(c)?, open, stopped))
         })
         .await?;
+    let probed = probed.into_iter().map(|p| (p.url.clone(), p)).collect();
     let seen = all
         .into_iter()
         .map(|h| (h.id, views::Seen { first: h.first_seen, last: h.last_seen }))
         .collect();
     let views: Vec<IncidentView> =
         open.iter().map(|i| incident_view(i, &s.cfg.mute, &stopped, now)).collect();
-    Ok(Json(views::overview(&s.cfg, &seen, &views, now)))
+    Ok(Json(views::overview(&s.cfg, &seen, &probed, &views, now)))
 }
 
 pub async fn host(State(s): State<AppState>, Path(host): Path<String>) -> ApiResult<HostView> {
