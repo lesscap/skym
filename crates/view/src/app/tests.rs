@@ -1,6 +1,6 @@
 use super::*;
 use skym_core::rules::{IncidentCode, Severity};
-use skym_core::view::{CustomerOverview, HostOverview, IncidentView};
+use skym_core::view::{CustomerOverview, HostOverview, IncidentView, Status};
 use std::collections::BTreeMap;
 
 fn t(sec: i64) -> Timestamp {

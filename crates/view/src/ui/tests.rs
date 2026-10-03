@@ -29,6 +29,10 @@ fn incident(subject: &str, code: IncidentCode, severity: Severity, opened: i64) 
 
 /// The overview screen as text, 100 columns wide.
 fn screen(theme: Theme) -> Vec<String> {
+    overview_screen(theme, 100)
+}
+
+fn overview_screen(theme: Theme, width: u16) -> Vec<String> {
     let host = HostOverview {
         id: "x".into(),
         status: Status::Critical,
@@ -59,8 +63,12 @@ fn screen(theme: Theme) -> Vec<String> {
         Msg::Fetched(Request::Overview, Ok(Box::new(Payload::Overview(overview)))),
         t(120),
     );
-    let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
-    terminal.draw(|f| draw(f, &app, "https://skym.example.com", t(120), theme)).unwrap();
+    render(&app, theme, width, 16)
+}
+
+fn render(app: &App, theme: Theme, width: u16, height: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| draw(f, app, "https://skym.example.com", t(120), theme)).unwrap();
     let buffer = terminal.backend().buffer();
     (0..buffer.area.height)
         .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol()).collect::<String>())
@@ -91,4 +99,95 @@ fn without_color_the_symbols_still_tell_the_status() {
     assert!(lines[line_of(&lines, " fresh ")].contains('✗'));
     assert!(lines[line_of(&lines, " x ")].contains('✗'), "the host's status");
     line_of(&lines, "1 critical");
+}
+
+#[test]
+fn on_a_narrow_terminal_the_reason_still_shows() {
+    let lines = overview_screen(Theme { color: true }, 90);
+    let row = &lines[line_of(&lines, " fresh ")];
+    assert!(row.contains("WORKLOAD_DOWN detail"), "the whole reason fits: {row}");
+}
+
+/// A service screen with one exception group, its stack 40 lines long.
+fn service_screen(component: &str, expanded: bool) -> Vec<String> {
+    use crate::app::{Frame, Screen};
+    let key = skym_core::subject::WorkloadKey {
+        host: "x".into(),
+        project: "app".into(),
+        service: "api".into(),
+    };
+    let stack: Vec<String> = (1..=40).map(|i| format!("at frame{i}")).collect();
+    let view: skym_core::view::WorkloadView = serde_json::from_value(serde_json::json!({
+        "key": key, "status": "warn", "facts": null,
+        "state": { "run": "running", "exit_code": null, "health": null, "memory_used_bytes": null, "datastore": null },
+        "exceptions": [{ "workload": key, "class": "application", "component": component, "code": "E",
+            "count": 180, "final_count": 180, "first_seen": "2026-10-01T00:00:00Z", "last_seen": "2026-10-01T00:00:00Z",
+            "sample": { "message": "job is already running", "stacktrace": stack.join("\n") } }]
+    }))
+    .unwrap();
+    let mut app = App::default();
+    app.stack.push(Frame {
+        screen: Screen::Workload(key.clone()),
+        cursor: 0,
+        expanded: expanded.then_some(0),
+    });
+    update(
+        &mut app,
+        Msg::Fetched(Request::Workload(key), Ok(Box::new(Payload::Workload(view)))),
+        t(120),
+    );
+    render(&app, Theme { color: true }, 100, 30)
+}
+
+#[test]
+fn an_expanded_stack_longer_than_the_room_is_cut_not_lost() {
+    let lines = service_screen("billing", true);
+    line_of(&lines, "job is already running");
+    line_of(&lines, "at frame1");
+    line_of(&lines, "more lines");
+    assert!(!lines.iter().any(|l| l.contains("at frame40")));
+}
+
+#[test]
+fn stderr_groups_count_no_failures_for_good() {
+    line_of(&service_screen("billing", false), "(180 for good)");
+    assert!(!service_screen("_stderr", false).iter().any(|l| l.contains("for good")));
+}
+
+#[test]
+fn on_a_very_narrow_terminal_the_sections_and_the_fold_still_read() {
+    let lines = overview_screen(Theme { color: true }, 70);
+    line_of(&lines, "ONGOING");
+    line_of(&lines, " fresh ");
+}
+
+#[test]
+fn a_service_hides_its_muted_problems_unless_asked() {
+    use crate::app::{Frame, Key, Screen};
+    let key = skym_core::subject::WorkloadKey {
+        host: "x".into(),
+        project: "app".into(),
+        service: "api".into(),
+    };
+    let view: skym_core::view::WorkloadView = serde_json::from_value(serde_json::json!({
+        "key": key, "status": "ok", "facts": null,
+        "state": { "run": "running", "exit_code": null, "health": null, "memory_used_bytes": null, "datastore": null },
+        "incidents": [{ "subject": "workload:x/app/api", "code": "WORKLOAD_UNHEALTHY", "severity": "critical",
+            "detail": "known flaky check", "opened_at": null, "open_for": null, "resolved_at": null,
+            "muted": true, "mute_reason": "known" }]
+    }))
+    .unwrap();
+    let mut app = App::default();
+    app.stack.push(Frame { screen: Screen::Workload(key.clone()), cursor: 0, expanded: None });
+    update(
+        &mut app,
+        Msg::Fetched(Request::Workload(key), Ok(Box::new(Payload::Workload(view)))),
+        t(120),
+    );
+    let shows = |app: &App| {
+        render(app, Theme { color: true }, 100, 30).iter().any(|l| l.contains("known flaky check"))
+    };
+    assert!(!shows(&app), "as on the overview, muted problems stay out of sight");
+    update(&mut app, Msg::Key(Key::Char('m')), t(121));
+    assert!(shows(&app));
 }

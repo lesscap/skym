@@ -1,9 +1,9 @@
 //! One service: its problems, state and facts side by side, exceptions, recent events.
 //! Also a host's exceptions, which read the same way.
 
-use super::{Theme, age, ago, block, event, reason, short};
+use super::{Theme, ago, block, empty_row, event, problem_table, reason};
 use crate::app::App;
-use crate::problems;
+use crate::names::short;
 use jiff::Timestamp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -11,78 +11,57 @@ use ratatui::style::Color;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use skym_core::model::{ExceptionGroup, Health, RunState, WorkloadFacts, WorkloadState};
+use skym_core::subject::Subject;
+use skym_core::view::WorkloadView;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
     let Some(w) = &app.workload.value else {
         return f.render_widget(Paragraph::new(" loading…"), area);
     };
     let observed = app.observed_since(&w.key.host);
-    let problems_height = (w.incidents.len() as u16 + 2).clamp(3, 8);
+    let code = |i: &skym_core::view::IncidentView| i.code.as_str().to_string();
+    let (problems, height) = problem_table(app, &w.incidents, observed, now, code, theme);
     let [head, problems_area, details, exceptions_area, events_area] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(problems_height),
+        Constraint::Length(height.min(8)),
         Constraint::Length(8),
         Constraint::Min(4),
         Constraint::Length(8),
     ])
     .areas(area);
-    let name = format!("{}/{}", w.key.project, w.key.service);
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(format!(" {} › {name}  ", w.key.host)),
-            theme.status(w.status),
-            Span::raw(format!(" {:?}", w.status).to_lowercase()),
-        ])),
-        head,
-    );
-    let rows: Vec<Row> = w
-        .incidents
-        .iter()
-        .map(|i| {
-            Row::new([
-                Cell::from(Line::from(vec![Span::raw(" "), theme.severity(i.severity)])),
-                Cell::from(i.code.as_str()),
-                Cell::from(reason(&i.detail)),
-                Cell::from(Line::from(age(problems::age(i, observed, now))).right_aligned()),
-            ])
-        })
-        .collect();
-    let widths =
-        [Constraint::Length(3), Constraint::Length(22), Constraint::Fill(1), Constraint::Length(9)];
-    let rows = match rows.is_empty() {
-        true => vec![Row::new([Cell::from(""), Cell::from("(none)")]).style(theme.dim())],
-        false => rows,
-    };
-    f.render_widget(
-        Table::new(rows, widths).block(block(" Problems ".into(), theme)),
-        problems_area,
-    );
+    f.render_widget(Paragraph::new(title(w, theme)), head);
+    f.render_widget(problems, problems_area);
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(details);
-    f.render_widget(
-        Paragraph::new(state_lines(&w.state, now, theme)).block(block(" State ".into(), theme)),
-        left,
-    );
-    f.render_widget(
-        Paragraph::new(fact_lines(w.facts.as_ref())).block(block(" Facts ".into(), theme)),
-        right,
-    );
+    let state = Paragraph::new(state_lines(&w.state, now, theme));
+    f.render_widget(state.block(block(" State ".into(), theme)), left);
+    let facts = Paragraph::new(fact_lines(w.facts.as_ref()));
+    f.render_widget(facts.block(block(" Facts ".into(), theme)), right);
     groups(f, exceptions_area, app, &w.exceptions, " Exceptions · last hour ", now, theme);
-    let events: Vec<Line> = w
+    f.render_widget(events(w, now, theme), events_area);
+}
+
+fn title(w: &WorkloadView, theme: Theme) -> Line<'static> {
+    let name = crate::names::full(&Subject::Workload(w.key.clone()));
+    Line::from(vec![
+        Span::raw(format!(" {} › {name}  ", w.key.host)),
+        theme.status(w.status),
+        Span::raw(format!(" {:?}", w.status).to_lowercase()),
+    ])
+}
+
+fn events(w: &WorkloadView, now: Timestamp, theme: Theme) -> Paragraph<'static> {
+    let lines: Vec<Line> = w
         .events
         .iter()
         .rev()
         .map(|e| Line::from(format!(" {:>6} ago  {}", ago(now, e.ts), event(&e.kind))))
         .collect();
-    let events = if events.is_empty() {
-        vec![Line::styled(" no events in the last day", theme.dim())]
-    } else {
-        events
+    let lines = match lines.is_empty() {
+        true => vec![Line::styled(" no events in the last day", theme.dim())],
+        false => lines,
     };
-    f.render_widget(
-        Paragraph::new(events).block(block(" Events · 24h ".into(), theme)),
-        events_area,
-    );
+    Paragraph::new(lines).block(block(" Events · 24h ".into(), theme))
 }
 
 /// A host's exception groups, from `e` on the host screen.
@@ -100,47 +79,61 @@ fn groups(
     now: Timestamp,
     theme: Theme,
 ) {
-    let cursor = app.frame().cursor;
+    // A row taller than the table is not drawn at all: an expanded stack fits or is cut.
+    let room = area.height.saturating_sub(2) as usize;
     let rows: Vec<Row> = list
         .iter()
         .enumerate()
         .map(|(i, g)| {
-            let sample = g.sample.as_ref();
-            let message = sample.map_or("", |s| s.message.as_str());
-            let mut text = vec![
-                Line::from(format!(
-                    "{}  {} {}  ×{}{}  last {} ago",
-                    short(&skym_core::subject::Subject::Workload(g.workload.clone())),
-                    g.component,
-                    g.code,
-                    g.count,
-                    if g.final_count > 0 {
-                        format!(" ({} for good)", g.final_count)
-                    } else {
-                        String::new()
-                    },
-                    ago(now, g.last_seen)
-                )),
-                Line::styled(format!("  {message}"), theme.dim()),
-            ];
+            let mut text = group_lines(g, now, theme);
             if app.frame().expanded == Some(i) {
-                let stack = sample.and_then(|s| s.stacktrace.as_deref()).unwrap_or("(no stack)");
-                text.extend(stack.lines().map(|l| Line::styled(format!("    {l}"), theme.dim())));
+                text.extend(stack_lines(g, room.saturating_sub(text.len()), theme));
             }
             let height = text.len() as u16;
             Row::new([Cell::from(text)]).height(height)
         })
         .collect();
-    let rows = if rows.is_empty() {
-        vec![Row::new([Cell::from(Span::styled(" none", theme.dim()))])]
-    } else {
-        rows
+    let rows = match rows.is_empty() {
+        true => vec![empty_row(0, " none".into(), theme)],
+        false => rows,
     };
-    let mut state = TableState::default().with_selected((!list.is_empty()).then_some(cursor));
-    let table = Table::new(rows, [Constraint::Fill(1)])
-        .block(block(title.into(), theme))
-        .row_highlight_style(theme.selected(true));
-    f.render_stateful_widget(table, area, &mut state);
+    let mut state =
+        TableState::default().with_selected((!list.is_empty()).then_some(app.frame().cursor));
+    let table = Table::new(rows, [Constraint::Fill(1)]).block(block(title.into(), theme));
+    f.render_stateful_widget(table.row_highlight_style(theme.selected(true)), area, &mut state);
+}
+
+/// The group and its sample message. Stderr lines count no retries, so no "for good".
+fn group_lines(g: &ExceptionGroup, now: Timestamp, theme: Theme) -> Vec<Line<'static>> {
+    let for_good = match (g.component.as_str(), g.final_count) {
+        ("_stderr", _) | (_, 0) => String::new(),
+        (_, n) => format!(" ({n} for good)"),
+    };
+    let message = g.sample.as_ref().map_or("", |s| s.message.as_str());
+    vec![
+        Line::from(format!(
+            "{}  {} {}  ×{}{for_good}  last {} ago",
+            short(&Subject::Workload(g.workload.clone())),
+            g.component,
+            g.code,
+            g.count,
+            ago(now, g.last_seen)
+        )),
+        Line::styled(format!("  {message}"), theme.dim()),
+    ]
+}
+
+/// The sample's stack in at most `room` lines, the last saying how many more there are.
+fn stack_lines(g: &ExceptionGroup, room: usize, theme: Theme) -> Vec<Line<'static>> {
+    let stack = g.sample.as_ref().and_then(|s| s.stacktrace.as_deref()).unwrap_or("(no stack)");
+    let all: Vec<&str> = stack.lines().collect();
+    let shown = if all.len() > room { room.saturating_sub(1) } else { all.len() };
+    let mut lines: Vec<Line> =
+        all[..shown].iter().map(|l| Line::styled(format!("    {l}"), theme.dim())).collect();
+    if shown < all.len() && room > 0 {
+        lines.push(Line::styled(format!("    … {} more lines", all.len() - shown), theme.dim()));
+    }
+    lines
 }
 
 fn state_lines(s: &WorkloadState, now: Timestamp, theme: Theme) -> Vec<Line<'static>> {

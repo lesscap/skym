@@ -1,8 +1,8 @@
 //! One host: what it is, how it is doing, its problems and its services.
 
-use super::{Theme, age, ago, block, local, reason, short};
+use super::{Theme, ago, block, local, problem_table};
 use crate::app::App;
-use crate::problems;
+use crate::names::short;
 use jiff::Timestamp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -10,59 +10,23 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use skym_core::model::RunState;
-use skym_core::rules::Severity;
-use skym_core::view::{HostView, IncidentView, Status};
+use skym_core::view::{HostView, Status};
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
     let Some(h) = &app.host.value else {
         return f.render_widget(Paragraph::new(" loading…"), area);
     };
-    let problems_height = (h.incidents.len() as u16 + 2).clamp(3, (area.height / 3).max(3));
-    let [head, problems_area, services] = Layout::vertical([
-        Constraint::Length(4),
-        Constraint::Length(problems_height),
+    let head = header(h, now, theme);
+    let (problems, height) =
+        problem_table(app, &h.incidents, h.observed_since, now, |i| short(&i.subject), theme);
+    let [head_area, problems_area, services] = Layout::vertical([
+        Constraint::Length(head.len() as u16),
+        Constraint::Length(height.min((area.height / 3).max(3))),
         Constraint::Min(3),
     ])
     .areas(area);
-    f.render_widget(Paragraph::new(header(h, now, theme)), head);
-    // As on the overview: muted ones only on `m`, hygiene folded unless `h`.
-    let shown = |i: &&IncidentView| {
-        (app.show_muted || !i.muted) && (app.show_info || i.severity != Severity::Info)
-    };
-    let mut incidents: Vec<_> = h.incidents.iter().filter(shown).collect();
-    let folded =
-        h.incidents.iter().filter(|i| !app.show_info && i.severity == Severity::Info).count();
-    incidents.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.subject.cmp(&b.subject)));
-    let problem_rows: Vec<Row> = incidents
-        .into_iter()
-        .map(|i| {
-            let a = problems::age(i, h.observed_since, now);
-            Row::new([
-                Cell::from(Line::from(vec![Span::raw(" "), theme.severity(i.severity)])),
-                Cell::from(short(&i.subject)),
-                Cell::from(reason(&i.detail)),
-                Cell::from(Line::from(age(a)).right_aligned()),
-            ])
-        })
-        .chain((folded > 0).then(|| {
-            let line = format!("· {folded} hygiene items (h)");
-            Row::new([Cell::from(""), Cell::from(line)]).style(theme.dim())
-        }))
-        .collect();
-    let widths = [
-        Constraint::Length(3),
-        Constraint::Percentage(25),
-        Constraint::Fill(1),
-        Constraint::Length(9),
-    ];
-    let problem_rows = match problem_rows.is_empty() {
-        true => vec![Row::new([Cell::from(""), Cell::from("(none)")]).style(theme.dim())],
-        false => problem_rows,
-    };
-    f.render_widget(
-        Table::new(problem_rows, widths).block(block(" Problems ".into(), theme)),
-        problems_area,
-    );
+    f.render_widget(Paragraph::new(head), head_area);
+    f.render_widget(problems, problems_area);
     service_table(f, services, app, now, theme);
 }
 

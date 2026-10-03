@@ -7,17 +7,16 @@ mod workload;
 
 use crate::api::FetchError;
 use crate::app::{App, Screen};
-use crate::problems::Age;
+use crate::problems::{self, Age};
 use jiff::Timestamp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use skym_core::rules::Severity;
-use skym_core::subject::Subject;
 use skym_core::time::format_duration;
-use skym_core::view::Status;
+use skym_core::view::{IncidentView, Status};
 
 /// Colors, unless `NO_COLOR` asks for none: then the symbols carry the meaning alone.
 #[derive(Clone, Copy)]
@@ -196,25 +195,6 @@ fn reason(detail: &str) -> String {
     detail.replace("OCI runtime exec failed: exec failed: unable to start container process: ", "")
 }
 
-/// A service by its own name (the host column says where it runs).
-fn service(subject: &Subject) -> String {
-    match subject {
-        Subject::Workload(k) => k.service.clone(),
-        other => short(other),
-    }
-}
-
-/// A subject as a person reads it next to its host.
-fn short(subject: &Subject) -> String {
-    match subject {
-        Subject::Workload(k) if k.project == "-" || k.project == "_systemd" => k.service.clone(),
-        Subject::Workload(k) => format!("{}/{}", k.project, k.service),
-        Subject::Mount { path, .. } => path.clone(),
-        Subject::Host(_) => "host".into(),
-        Subject::Endpoint(url) => url.clone(),
-    }
-}
-
 fn event(kind: &skym_core::model::EventKind) -> String {
     use skym_core::model::EventKind;
     match kind {
@@ -226,6 +206,54 @@ fn event(kind: &skym_core::model::EventKind) -> String {
         EventKind::KernelChanged => "kernel changed".into(),
         EventKind::Unknown => "(an event this version does not know)".into(),
     }
+}
+
+/// Problems, worst first, each with how long it has lasted, and the height they take. As
+/// on the overview: muted ones only on `m`, hygiene folded into one line unless `h`.
+/// `name` fills the second column.
+fn problem_table<'a>(
+    app: &App,
+    incidents: &'a [IncidentView],
+    observed_since: Option<Timestamp>,
+    now: Timestamp,
+    name: impl Fn(&IncidentView) -> String,
+    theme: Theme,
+) -> (Table<'a>, u16) {
+    let shown = |i: &&IncidentView| {
+        (app.show_muted || !i.muted) && (app.show_info || i.severity != Severity::Info)
+    };
+    let mut listed: Vec<&IncidentView> = incidents.iter().filter(shown).collect();
+    listed.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.subject.cmp(&b.subject)));
+    let folded =
+        incidents.iter().filter(|i| !app.show_info && i.severity == Severity::Info).count();
+    let mut rows: Vec<Row> = listed
+        .into_iter()
+        .map(|i| {
+            Row::new([
+                Cell::from(Line::from(vec![Span::raw(" "), theme.severity(i.severity)])),
+                Cell::from(name(i)),
+                Cell::from(reason(&i.detail)),
+                Cell::from(Line::from(age(problems::age(i, observed_since, now))).right_aligned()),
+            ])
+        })
+        .collect();
+    if folded > 0 {
+        rows.push(empty_row(2, format!("· {folded} hygiene items (h)"), theme));
+    }
+    if rows.is_empty() {
+        rows.push(empty_row(1, "(none)".into(), theme));
+    }
+    let height = rows.len() as u16 + 2;
+    let widths =
+        [Constraint::Length(3), Constraint::Max(30), Constraint::Min(20), Constraint::Length(9)];
+    (Table::new(rows, widths).block(block(" Problems ".into(), theme)), height)
+}
+
+/// A line of text in a table, in the given column: tables have no spanning cells.
+fn empty_row(column: usize, text: String, theme: Theme) -> Row<'static> {
+    let mut cells = vec![Cell::from(""); column];
+    cells.push(Cell::from(text));
+    Row::new(cells).style(theme.dim())
 }
 
 fn block(title: String, theme: Theme) -> Block<'static> {

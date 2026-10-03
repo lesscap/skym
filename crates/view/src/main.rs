@@ -3,6 +3,7 @@
 mod api;
 mod app;
 mod connect;
+mod names;
 mod problems;
 mod ui;
 
