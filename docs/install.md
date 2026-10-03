@@ -24,8 +24,11 @@ cargo zigbuild --release -p skym-server --target x86_64-unknown-linux-musl
    ```sh
    docker build -t skym-server -f deploy/Dockerfile <dir holding the binary>
    docker run -d --restart unless-stopped -p 127.0.0.1:7280:7280 \
-     -v $PWD/server.toml:/etc/skym/server.toml:ro -v skym-data:/data skym-server
+     -v $PWD/server.toml:/etc/skym/server.toml:ro -v skym-data:/data \
+     -v /etc/ssl/certs:/etc/ssl/certs:ro skym-server
    ```
+
+   The image holds nothing but the binary: the host's CA certificates, mounted read-only, let it verify the https endpoints it probes.
 4. Point the reverse proxy at port 7280 and check `https://<server>/healthz`.
 
 Changing the configuration (a new host, reader, mute or endpoint) takes a restart.
