@@ -149,6 +149,20 @@ fn down(mut r: Report, i: usize) -> Report {
 }
 
 #[test]
+fn a_stopped_workload_says_when_it_stopped() {
+    let mut c = db::open_in_memory().unwrap();
+    let stopped_at = t0() - SignedDuration::from_hours(24 * 360);
+    for m in [0, 1] {
+        let mut r = down(report(t0() + mins(m)), 0);
+        r.workloads[0].state.state_since = Some(stopped_at);
+        send(&mut c, &r, t0() + mins(m)).unwrap();
+    }
+    let open = incidents::listed(&c, true, Some("x"), None, Timestamp::UNIX_EPOCH, 10).unwrap();
+    let since = hosts::stopped_since(&c, &open).unwrap();
+    assert_eq!(since.into_values().collect::<Vec<_>>(), [stopped_at]);
+}
+
+#[test]
 fn a_failed_source_hides_only_what_it_did_not_report() {
     let mut c = db::open_in_memory().unwrap();
     for m in [0, 1] {

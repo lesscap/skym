@@ -72,13 +72,12 @@ fn workload_key(host: &str, workload: &str) -> Result<WorkloadKey, ApiError> {
 
 pub async fn overview(State(s): State<AppState>) -> ApiResult<Overview> {
     let now = Timestamp::now();
-    let (all, open) = s
+    let (all, open, stopped) = s
         .store
         .call(|c| {
-            Ok((
-                hosts::all(c)?,
-                incidents::listed(c, true, None, None, Timestamp::UNIX_EPOCH, MAX_ROWS)?,
-            ))
+            let open = incidents::listed(c, true, None, None, Timestamp::UNIX_EPOCH, MAX_ROWS)?;
+            let stopped = hosts::stopped_since(c, &open)?;
+            Ok((hosts::all(c)?, open, stopped))
         })
         .await?;
     let seen = all
@@ -86,7 +85,7 @@ pub async fn overview(State(s): State<AppState>) -> ApiResult<Overview> {
         .map(|h| (h.id, views::Seen { first: h.first_seen, last: h.last_seen }))
         .collect();
     let views: Vec<IncidentView> =
-        open.iter().map(|i| incident_view(i, &s.cfg.mute, now)).collect();
+        open.iter().map(|i| incident_view(i, &s.cfg.mute, &stopped, now)).collect();
     Ok(Json(views::overview(&s.cfg, &seen, &views, now)))
 }
 
@@ -104,7 +103,9 @@ pub async fn host(State(s): State<AppState>, Path(host): Path<String>) -> ApiRes
             ))
         })
         .await?;
-    let incidents = open.iter().map(|i| incident_view(i, &s.cfg.mute, now)).collect();
+    let stopped =
+        workloads.iter().filter_map(|w| Some((w.key.clone(), w.state.stopped_since()?))).collect();
+    let incidents = open.iter().map(|i| incident_view(i, &s.cfg.mute, &stopped, now)).collect();
     let customer = s.cfg.hosts.iter().find(|h| h.id == host).map(|h| h.customer.clone());
     Ok(Json(views::host(host, customer, row, workloads, incidents, now)))
 }
@@ -132,10 +133,11 @@ pub async fn workload(
         })
         .await?;
     let row = row.ok_or_else(|| ApiError::not_found(format!("workload {subject} is unknown")))?;
+    let stopped = row.state.stopped_since().map(|t| (row.key.clone(), t)).into_iter().collect();
     let incidents = open
         .iter()
         .filter(|i| i.subject == subject)
-        .map(|i| incident_view(i, &s.cfg.mute, now))
+        .map(|i| incident_view(i, &s.cfg.mute, &stopped, now))
         .collect();
     Ok(Json(views::workload(row, incidents, exceptions, events)))
 }
@@ -195,13 +197,17 @@ pub async fn incidents(
     let from = since(q.since.as_deref(), "24h", now)?;
     let n = limit(q.limit);
     let host = q.host.clone();
-    let rows = s
+    let (rows, stopped) = s
         .store
-        .call(move |c| Ok(incidents::listed(c, open, host.as_deref(), code, from, MAX_ROWS)?))
+        .call(move |c| {
+            let rows = incidents::listed(c, open, host.as_deref(), code, from, MAX_ROWS)?;
+            let stopped = hosts::stopped_since(c, &rows)?;
+            Ok((rows, stopped))
+        })
         .await?;
     let views: Vec<IncidentView> = rows
         .iter()
-        .map(|i| incident_view(i, &s.cfg.mute, now))
+        .map(|i| incident_view(i, &s.cfg.mute, &stopped, now))
         .filter(|i| q.include_muted.unwrap_or(false) || !i.muted)
         .collect();
     let (incidents, truncated) = views::cap(views, n);

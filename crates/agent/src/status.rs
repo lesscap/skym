@@ -37,6 +37,7 @@ fn incident(f: Finding) -> IncidentView {
         severity: f.severity,
         detail: f.detail,
         opened_at: None,
+        since: None,
         open_for: None,
         resolved_at: None,
         muted: false,

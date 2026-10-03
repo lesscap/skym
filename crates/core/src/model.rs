@@ -163,6 +163,17 @@ pub struct WorkloadState {
     pub health_output: Option<String>,
 }
 
+impl WorkloadState {
+    /// When the workload stopped, if it is stopped: the real start of its being down. A
+    /// running one (a systemd unit that stopped listening) has no such time.
+    pub fn stopped_since(&self) -> Option<Timestamp> {
+        match self.run {
+            RunState::Running | RunState::Unknown => None,
+            _ => self.state_since,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct DatastoreProbe {
     pub reachable: bool,

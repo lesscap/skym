@@ -2,7 +2,7 @@
 
 Agent-first monitoring for a handful of Linux hosts and the containers running on them.
 
-A small `skym` binary runs on every host. It checks the host, its containers and the applications inside them, then pushes a compact report to `skym-server` over outbound HTTPS. The server keeps the latest state, turns changes into events and problems into incidents, and exposes everything through a JSON API that an AI agent can read directly. A web UI comes later and is only another view over the same API.
+A small `skym` binary runs on every host. It checks the host, its containers and the applications inside them, then pushes a compact report to `skym-server` over outbound HTTPS. The server keeps the latest state, turns changes into events and problems into incidents, and exposes everything through a JSON API that an AI agent can read directly. People read the same API in a terminal with `skym-view`.
 
 What makes it different:
 
@@ -31,8 +31,9 @@ Under development; not released yet. Build from source with `cargo build --relea
 | `skym status`, `exceptions`, `report --dry-run`, `schema` | Working: host, Docker, systemd, datastore and container log checks |
 | `skym agent`, `skym doctor` | Working: reports every interval, buffers and replays while the server is away |
 | `skym-server` | Working: report ingest, incidents, heartbeat loss, disk projection, query API |
+| `skym-view` | Working: a terminal view of the server for people (read-only) |
 | Endpoint and TLS probes | Next |
-| Releases and install, the agent skill, notifications, web UI | Later |
+| Releases, notifications | Later |
 
 ## License
 

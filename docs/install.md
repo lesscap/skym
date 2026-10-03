@@ -53,6 +53,18 @@ The unit runs `skym agent` as the `skym` user with read-only access to the syste
 
 Membership in the `docker` group is effectively root access; see the [security model](architecture.md#security-model).
 
+## Viewing from your own machine
+
+`skym-view` is a terminal view of the server, read-only, for people:
+
+```sh
+cargo install --path crates/view
+skym-view                      # SKYM_URL and SKYM_TOKEN from the environment or ~/.config/skym/env
+skym-view --server https://skym.example.com
+```
+
+`~/.config/skym/env` holds `KEY=VALUE` lines (`SKYM_URL=…`, `SKYM_TOKEN=<reader token>`); keep it mode 0600. Press `?` in the view for its keys.
+
 ## AI agents
 
 Give the agent the [skill](../skill/SKILL.md) and a reader token, as `SKYM_URL` and `SKYM_TOKEN` in its environment or in `~/.config/skym/env`.

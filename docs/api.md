@@ -8,7 +8,7 @@ The API `skym-server` offers to AI agents and, later, to the UI. It is read-only
 - **Bounded responses.** The overview carries status and counts, not facts. Lists have a default limit and return `truncated: true` when cut.
 - **Links to drill down.** Objects carry `links` to the endpoints that explain them (`host`, `workload`, `timeline`, `exceptions`, `incidents`), so an agent rarely builds URLs itself.
 - **Self-describing.** `GET /api` lists every endpoint with its purpose and parameters.
-- **Two forms of time.** Absolute timestamps (`opened_at`, RFC 3339) and durations (`open_for: "3h12m"`). Durations let an agent tell new problems from chronic ones at a glance. `open_for` is how long skym has seen a problem: compare it with the host's `observed_since`, and read a workload's `state_since` for when its state really began.
+- **Two forms of time.** Absolute timestamps (`opened_at`, RFC 3339) and durations (`open_for: "3h12m"`). Durations let an agent tell new problems from chronic ones at a glance. `open_for` is how long skym has seen a problem: compare it with the host's `observed_since`. An incident's `since`, when present, is when the problem really began (a stopped workload: when it stopped), which may predate skym.
 - **Read-only.** Muting lives in the server configuration. A leaked reader token can read but not change anything.
 
 ## Authentication

@@ -347,12 +347,24 @@ fn incident(subject: Subject, severity: Severity, muted: bool) -> IncidentView {
         severity,
         detail: String::new(),
         opened_at: None,
+        since: None,
         open_for: None,
         resolved_at: None,
         muted,
         mute_reason: None,
         links: BTreeMap::new(),
     }
+}
+
+#[test]
+fn only_a_stopped_workload_knows_since_when_it_is_down() {
+    let mut state = base().workloads[APP].state.clone();
+    state.state_since = Some(ago(&base(), 60));
+    assert_eq!(state.stopped_since(), None, "running: the start time is not a problem's start");
+    state.run = RunState::Exited;
+    assert_eq!(state.stopped_since(), state.state_since);
+    state.run = RunState::Unknown;
+    assert_eq!(state.stopped_since(), None);
 }
 
 #[test]

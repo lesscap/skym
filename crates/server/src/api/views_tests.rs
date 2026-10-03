@@ -31,9 +31,33 @@ fn mute(subject: &str, code: IncidentCode, until: Option<Timestamp>) -> Mute {
 }
 
 #[test]
+fn only_a_stopped_workload_knows_when_its_problem_began() {
+    let key: WorkloadKey =
+        WorkloadKey { host: "x".into(), project: "app".into(), service: "api".into() };
+    let stopped = BTreeMap::from([(key, at(-600))]);
+    let view = |code| {
+        incident_view(
+            &incident("workload:x/app/api", code, Severity::Critical),
+            &[],
+            &stopped,
+            at(5),
+        )
+    };
+    assert_eq!(view(IncidentCode::WorkloadDown).since, Some(at(-600)));
+    assert_eq!(view(IncidentCode::WorkloadUnhealthy).since, None, "started is not unhealthy since");
+    let other = incident("workload:x/app/web", IncidentCode::WorkloadDown, Severity::Critical);
+    assert_eq!(incident_view(&other, &[], &stopped, at(5)).since, None);
+    let mut resolved =
+        incident("workload:x/app/api", IncidentCode::WorkloadDown, Severity::Critical);
+    resolved.state = State::Resolved;
+    resolved.resolved_at = Some(at(4));
+    assert_eq!(incident_view(&resolved, &[], &stopped, at(5)).since, None, "only while open");
+}
+
+#[test]
 fn mutes_match_exactly_and_expire() {
     let i = incident("workload:x/app/api", IncidentCode::WorkloadUnhealthy, Severity::Critical);
-    let view = |mutes: &[Mute], now| incident_view(&i, mutes, now);
+    let view = |mutes: &[Mute], now| incident_view(&i, mutes, &BTreeMap::new(), now);
     let exact = mute("workload:x/app/api", IncidentCode::WorkloadUnhealthy, Some(at(60)));
     let muted = view(std::slice::from_ref(&exact), at(30));
     assert_eq!((muted.muted, muted.mute_reason.as_deref()), (true, Some("known")));
@@ -79,18 +103,30 @@ fn overview_ranks_hosts_and_ignores_muted_incidents() {
         .map(|h| (h.to_string(), Seen { first: at(-60), last: at(0) }))
         .collect();
     let open = [
-        incident_view(&incident("host:a", IncidentCode::OomKilled, Severity::Warn), &[], at(5)),
+        incident_view(
+            &incident("host:a", IncidentCode::OomKilled, Severity::Warn),
+            &[],
+            &BTreeMap::new(),
+            at(5),
+        ),
         incident_view(
             &incident("workload:b/app/api", IncidentCode::WorkloadDown, Severity::Critical),
             &[],
+            &BTreeMap::new(),
             at(5),
         ),
         incident_view(
             &incident("workload:c/app/api", IncidentCode::WorkloadDown, Severity::Critical),
             &[mute("workload:c/app/api", IncidentCode::WorkloadDown, None)],
+            &BTreeMap::new(),
             at(5),
         ),
-        incident_view(&incident("host:c", IncidentCode::LogUnbounded, Severity::Info), &[], at(5)),
+        incident_view(
+            &incident("host:c", IncidentCode::LogUnbounded, Severity::Info),
+            &[],
+            &BTreeMap::new(),
+            at(5),
+        ),
     ];
     let o = overview(&cfg, &seen, &open, at(5));
     let hosts: Vec<(&str, Status)> =

@@ -67,6 +67,9 @@ pub struct IncidentView {
     pub severity: Severity,
     pub detail: String,
     pub opened_at: Option<Timestamp>,
+    /// When the problem really began, if known; it may predate `opened_at` (and skym).
+    #[serde(default)]
+    pub since: Option<Timestamp>,
     pub open_for: Option<String>,
     pub resolved_at: Option<Timestamp>,
     #[serde(default)]

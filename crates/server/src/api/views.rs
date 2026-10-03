@@ -6,8 +6,8 @@ use crate::store::hosts::{HostRow, WorkloadRow};
 use crate::store::incidents::LogEntry;
 use jiff::Timestamp;
 use skym_core::model::{Event, ExceptionGroup};
-use skym_core::rules::Severity;
-use skym_core::subject::{CustomerId, HostId, Subject};
+use skym_core::rules::{IncidentCode, Severity};
+use skym_core::subject::{CustomerId, HostId, Subject, WorkloadKey};
 use skym_core::time::format_duration;
 use skym_core::view::{
     CustomerOverview, HostOverview, HostView, IncidentView, Overview, Status, Timeline,
@@ -15,7 +15,13 @@ use skym_core::view::{
 };
 use std::collections::BTreeMap;
 
-pub fn incident_view(i: &Incident, mutes: &[Mute], now: Timestamp) -> IncidentView {
+/// `stopped`: when stopped workloads stopped, for the real start of `WORKLOAD_DOWN`.
+pub fn incident_view(
+    i: &Incident,
+    mutes: &[Mute],
+    stopped: &BTreeMap<WorkloadKey, Timestamp>,
+    now: Timestamp,
+) -> IncidentView {
     let mute = mutes.iter().find(|m| {
         m.subject == i.subject && m.code == i.code && m.until.is_none_or(|until| now < until)
     });
@@ -25,6 +31,14 @@ pub fn incident_view(i: &Incident, mutes: &[Mute], now: Timestamp) -> IncidentVi
         severity: i.severity,
         detail: i.detail.clone(),
         opened_at: i.opened_at,
+        since: match &i.subject {
+            Subject::Workload(k)
+                if i.code == IncidentCode::WorkloadDown && i.state == State::Open =>
+            {
+                stopped.get(k).copied()
+            }
+            _ => None,
+        },
         open_for: i
             .opened_at
             .filter(|_| i.state == State::Open)

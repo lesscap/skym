@@ -15,6 +15,8 @@ exclude_re = [
     "agent.rs.*(delete ! in|replace - with \\+ in) Agent<'a>::pass",
     # Message wording: the "waiting" count.
     "agent.rs.*replace - with \\+ in Agent<'a>::flush",
+    # skym-view's HTTP calls; their paths are tested.
+    "view/src/api.rs.*(in|replace) (Client::|install_tls|chain)",
     "systemd.rs.* in collect\\b",
     # Equivalent: the rank ends with the container id, so `>` and `>=` differ only for the same container.
     "containers.rs.*replace > with >= in winners",
@@ -32,4 +34,8 @@ exclude_globs = [
     # HTTP delivery and doctor's checks: verified end to end against a server.
     "crates/agent/src/deliver.rs",
     "crates/agent/src/doctor.rs",
+    # skym-view: drawing and the terminal loop are checked by eye against a real server;
+    # what they show is decided in problems.rs and app.rs, which are tested.
+    "crates/view/src/main.rs",
+    "crates/view/src/ui/*.rs",
 ]
