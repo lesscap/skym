@@ -179,11 +179,15 @@ pub fn workload(
 /// `None` until it first reports; `open` holds the open incidents, muted ones included.
 pub fn host_overview(
     id: &HostId,
+    tags: &[String],
     row: Option<&HostRow>,
     apps: &[AppSummary],
     open: &[IncidentView],
     now: Timestamp,
 ) -> HostOverview {
+    let mut tags = tags.to_vec();
+    tags.sort();
+    tags.dedup();
     let mine: Vec<IncidentView> =
         open.iter().filter(|i| !i.muted && i.subject.host() == Some(id)).cloned().collect();
     let filling = |path: &str| {
@@ -235,6 +239,7 @@ pub fn host_overview(
         docker_version: facts.and_then(|f| f.docker_version.clone()),
         agent_version: facts.map(|f| f.agent_version.clone()),
         ip: row.and_then(|r| r.remote_addr.clone()),
+        tags,
     }
 }
 
@@ -249,7 +254,7 @@ pub fn hosts(
     let mut hosts: Vec<HostOverview> = cfg
         .hosts
         .iter()
-        .map(|h| host_overview(&h.id, rows.iter().find(|r| r.id == h.id), apps, open, now))
+        .map(|h| host_overview(&h.id, &h.tags, rows.iter().find(|r| r.id == h.id), apps, open, now))
         .collect();
     hosts.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.id.cmp(&b.id)));
     hosts

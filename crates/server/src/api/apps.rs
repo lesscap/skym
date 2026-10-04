@@ -1,7 +1,7 @@
 //! Applications: workloads grouped by application, described by the configuration. Pure.
 
 use super::views::{links, status};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, HostEntry};
 use crate::store::hosts::WorkloadRow;
 use jiff::Timestamp;
 use skym_core::model::{Event, EventKind, RunState};
@@ -29,6 +29,7 @@ const DEPLOYS: usize = 10;
 /// probes of applications.
 pub fn summaries(
     workloads: &[WorkloadRow],
+    hosts: &[HostEntry],
     configured: &[AppConfig],
     endpoints: &[EndpointOverview],
     open: &[IncidentView],
@@ -45,7 +46,8 @@ pub fn summaries(
         .into_iter()
         .map(|(key, rows)| {
             let config = configured.iter().find(|a| a.id == key);
-            summary(key, &rows, config, endpoints, open, history)
+            let host = hosts.iter().find(|h| h.id == key.host).map_or(&[][..], |h| &h.tags);
+            summary(key, &rows, config, host, endpoints, open, history)
         })
         .collect();
     apps.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.key.cmp(&b.key)));
@@ -56,10 +58,15 @@ fn summary(
     key: AppKey,
     rows: &[&WorkloadRow],
     config: Option<&AppConfig>,
+    host_tags: &[String],
     endpoints: &[EndpointOverview],
     open: &[IncidentView],
     history: &History,
 ) -> AppSummary {
+    let mut tags: Vec<String> =
+        host_tags.iter().chain(config.iter().flat_map(|c| &c.tags)).cloned().collect();
+    tags.sort();
+    tags.dedup();
     let endpoints: Vec<EndpointOverview> =
         endpoints.iter().filter(|e| e.app.as_ref() == Some(&key)).cloned().collect();
     let incidents: Vec<IncidentView> =
@@ -97,6 +104,7 @@ fn summary(
             .take(DEPLOYS)
             .collect(),
         exceptions_1h: rows.iter().filter_map(|w| history.exceptions_1h.get(&w.key)).sum(),
+        tags,
         endpoints,
         incidents,
         links: BTreeMap::from([

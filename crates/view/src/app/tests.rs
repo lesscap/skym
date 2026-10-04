@@ -1,4 +1,5 @@
 use super::*;
+use crate::apps::Grouping;
 use skym_core::rules::{IncidentCode, Severity};
 use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{AppSummary, HostOverview, IncidentView, Status, WorkloadSummary};
@@ -57,6 +58,7 @@ fn host(id: &str) -> HostOverview {
         docker_version: None,
         agent_version: None,
         ip: None,
+        tags: vec![],
     }
 }
 
@@ -95,6 +97,7 @@ fn summary(key: &str, env: Option<&str>, status: Status) -> AppSummary {
         workloads: vec![],
         deploys: vec![],
         exceptions_1h: 0,
+        tags: vec![],
     }
 }
 
@@ -219,6 +222,8 @@ fn a_host_lists_its_apps_and_an_app_its_services() {
     assert_eq!(app.host_rows().len(), 2);
     assert_eq!(press(&mut app, &[Key::Enter]), [Request::Host("x".into())]);
     fetched(&mut app, Request::Host("x".into()), Payload::Host(host_view()), t(3));
+    assert_eq!(press(&mut app, &[Key::Char('e')]), [Request::Exceptions("x".into())]);
+    press(&mut app, &[Key::Esc]);
     let apps: Vec<String> = app.host_apps().iter().map(|a| a.name.clone()).collect();
     assert_eq!(apps, ["zz", "app"], "in the server's order: problems first");
     let zz: AppKey = "x/zz".parse().unwrap();
@@ -226,6 +231,16 @@ fn a_host_lists_its_apps_and_an_app_its_services() {
     fetched(&mut app, Request::App(zz), Payload::App(app_view("x/zz")), t(3));
     let services: Vec<String> = app.services().iter().map(|w| w.key.service.clone()).collect();
     assert_eq!(services, ["api", "web"], "problems first");
+    let filtered = |app: &mut App, text: &str| {
+        app.filter = Some(text.into());
+        let names = app.services().iter().map(|w| w.key.service.clone()).collect::<Vec<_>>();
+        app.filter = None;
+        names
+    };
+    assert_eq!(filtered(&mut app, "!ok"), ["api"]);
+    assert_eq!(filtered(&mut app, "we"), ["web"], "by its name");
+    assert_eq!(filtered(&mut app, "host:y").len(), 0);
+    assert_eq!(filtered(&mut app, "host:x env:prod tag:a").len(), 2, "no env or tags: ignored");
     let api = WorkloadKey { host: "x".into(), project: "app".into(), service: "api".into() };
     assert_eq!(press(&mut app, &[Key::Enter]), [Request::Workload(api)]);
     press(&mut app, &[Key::Esc, Key::Esc, Key::Esc]);
@@ -321,27 +336,98 @@ fn muted_problems_join_once_shown_and_read() {
     assert_eq!(app.problem_rows(t(3)).len(), 4);
 }
 
+fn typed(text: &str) -> Vec<Key> {
+    let mut keys = vec![Key::Char('/')];
+    keys.extend(text.chars().map(Key::Char));
+    keys.push(Key::Enter);
+    keys
+}
+
+/// The applications tab as listed: `[group]` headers and application names.
+fn app_rows(app: &App) -> Vec<String> {
+    let row = |r: &AppRow| match r {
+        AppRow::Group(g) => format!("[{}]", g.name),
+        AppRow::App(a) => a.name.clone(),
+    };
+    app.app_rows().iter().map(row).collect()
+}
+
 #[test]
-fn the_applications_tab_folds_environments_and_leads_to_an_app() {
+fn the_applications_tab_groups_folds_and_leads_to_an_app() {
     let mut app = loaded();
+    press(&mut app, &[Key::Char('g')]);
+    assert_eq!(app.grouping, Grouping::Env, "only the applications tab groups");
+    let mut shop = summary("y/shop", Some("prod"), Status::Ok);
+    shop.tags = vec!["acme".into()];
     let list = AppList {
         apps: vec![
-            summary("y/shop", Some("prod"), Status::Ok),
+            shop,
             summary("y/shop-test", Some("test"), Status::Ok),
             summary("x/blog", Some("test"), Status::Critical),
         ],
     };
     fetched(&mut app, Request::Apps, Payload::Apps(list), t(2));
     press(&mut app, &[Key::Tab]);
-    let names = |app: &App| app.app_rows().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
-    assert_eq!(names(&app), ["shop", "blog"], "test is folded, its trouble still shown");
+    assert_eq!(app_rows(&app), ["[prod]", "[test]", "blog"], "folded to their trouble");
+    assert!(press(&mut app, &[Key::Enter]).is_empty(), "a header opens in place");
+    assert_eq!(app_rows(&app), ["[prod]", "shop", "[test]", "blog"]);
     press(&mut app, &[Key::Char('e')]);
-    assert_eq!(names(&app), ["shop", "blog", "shop-test"]);
-    press(&mut app, &[Key::Char('/'), Key::Char('b'), Key::Enter]);
-    assert_eq!(names(&app), ["blog"]);
+    assert_eq!(app_rows(&app), ["[prod]", "shop", "[test]", "blog", "shop-test"]);
+    press(&mut app, &[Key::Char('e')]);
+    assert_eq!(app_rows(&app), ["[prod]", "[test]", "blog"], "all open, so all folded");
+    press(&mut app, &[Key::Down, Key::Char('g')]);
+    assert_eq!(
+        (app_rows(&app), app.frame().cursor),
+        (vec!["[x]".into(), "blog".into(), "[y]".into()], 0)
+    );
+    press(&mut app, &[Key::Char('g')]);
+    assert_eq!(app_rows(&app), ["[acme]", "[untagged]", "blog"]);
+    press(&mut app, &[Key::Char('g')]);
+    assert_eq!(app.grouping, Grouping::Env);
+    press(&mut app, &typed("tag:acme"));
+    assert_eq!(app_rows(&app), ["[prod]"]);
+    press(&mut app, &[Key::Esc]);
+    press(&mut app, &typed("host:x !ok"));
+    assert_eq!(app_rows(&app), ["[test]", "blog"]);
     let blog: AppKey = "x/blog".parse().unwrap();
-    assert_eq!(press(&mut app, &[Key::Enter]), [Request::App(blog)]);
+    assert_eq!(press(&mut app, &[Key::Down, Key::Enter]), [Request::App(blog)]);
     assert_eq!(app.filter, None, "a new screen starts unfiltered");
+}
+
+#[test]
+fn the_filter_matches_fields_where_a_list_has_them() {
+    let mut app = loaded();
+    app.overview.value.as_mut().unwrap().hosts[1].tags = vec!["acme".into()];
+    let filtered = |app: &mut App, text: &str| {
+        app.filter = Some(text.into());
+        let problems: Vec<String> =
+            app.problem_rows(t(2)).iter().map(|r| r.incident.subject.to_string()).collect();
+        let hosts: Vec<String> = app.host_rows().iter().map(|h| h.id.clone()).collect();
+        (problems, hosts)
+    };
+    let (problems, hosts) = filtered(&mut app, "host:y");
+    assert_eq!((problems, hosts), (vec!["host:y".to_string()], vec!["y".to_string()]));
+    let (problems, hosts) = filtered(&mut app, "TAG:acme");
+    assert_eq!(
+        (problems, hosts),
+        (vec!["host:y".to_string()], vec!["y".to_string()]),
+        "a host's own problem has its host's tags"
+    );
+    let (problems, hosts) = filtered(&mut app, "env:prod");
+    assert_eq!(
+        problems,
+        ["endpoint:https://shop.example.com/", "host:y"],
+        "an unclassified app's problem is left out, and one of an app not listed"
+    );
+    assert_eq!(hosts.len(), 2, "hosts have no environment: ignored");
+    let (problems, _) = filtered(&mut app, "host: exited");
+    assert_eq!(problems.len(), 4, "a field still being typed holds");
+    let (_, hosts) = filtered(&mut app, "x !ok");
+    assert_eq!(hosts, ["x"]);
+    let (_, hosts) = filtered(&mut app, "acm");
+    assert_eq!(hosts, ["y"], "a host's text has its tags");
+    let (problems, _) = filtered(&mut app, "host:x shop");
+    assert_eq!(problems, ["endpoint:https://shop.example.com/"], "every term holds");
 }
 
 #[test]

@@ -67,7 +67,7 @@ Event.subject    ∈ Host ∪ Workload
 Incident.app     = app(w) for a workload, the endpoint's app, the app itself; none for a host or mount
 ```
 
-There are no customers or other fixed groupings: hosts and applications will carry tags for filtering.
+There are no customers or other fixed groupings: hosts and applications carry tags, from the configuration, for grouping and filtering. An application has its host's tags and its own.
 
 ### Subjects
 

@@ -191,6 +191,9 @@ pub struct HostOverview {
     /// The address the host reports from, as the server sees it.
     #[serde(default)]
     pub ip: Option<String>,
+    /// From the configuration, sorted.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -304,6 +307,9 @@ pub struct AppSummary {
     /// Application-class exceptions in the last hour.
     #[serde(default)]
     pub exceptions_1h: u32,
+    /// Its host's tags and its own, sorted.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// A new image for one of an application's workloads.

@@ -6,6 +6,7 @@ report_interval = "60s"
 [[hosts]]
 id = "web-1"
 token_sha256 = "<64 hex characters>"
+tags = ["acme"]                 # optional: lowercase letters, digits, . _ -; its applications inherit them
 
 [[readers]]
 name = "ops-agent"
@@ -18,6 +19,7 @@ id = "web-1/shop"               # <host>/<project>, <host>/-/<container> or <hos
 name = "Shop"
 env = "prod"                    # any text; prod, pre and test sort first
 note = "The web shop"
+tags = ["billing"]              # besides its host's: this one is tagged acme and billing
 
 # By default any status below 400 is up.
 [[apps.probes]]

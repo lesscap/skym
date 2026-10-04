@@ -1,6 +1,6 @@
 //! Keys: moving, opening and leaving screens, filtering and toggles.
 
-use super::{App, Data, Frame, Key, Screen, TABS, WINDOWS};
+use super::{App, AppRow, Data, Frame, Key, Screen, TABS, WINDOWS};
 use crate::api::Request;
 use jiff::Timestamp;
 use skym_core::subject::Subject;
@@ -35,7 +35,17 @@ impl App {
                     (_, None) => None,
                 }
             }),
-            Screen::Apps => self.app_rows().get(cursor).map(|a| Screen::App(a.key.clone())),
+            Screen::Apps => match self.app_rows().into_iter().nth(cursor) {
+                Some(AppRow::App(a)) => Some(Screen::App(a.key.clone())),
+                Some(AppRow::Group(g)) => {
+                    let group = (self.grouping, g.name);
+                    if !self.open_groups.remove(&group) {
+                        self.open_groups.insert(group);
+                    }
+                    None
+                }
+                None => None,
+            },
             Screen::Hosts => self.host_rows().get(cursor).map(|h| Screen::Host(h.id.clone())),
             Screen::Host(_) => self.host_apps().get(cursor).map(|a| Screen::App(a.key.clone())),
             Screen::App(_) => self.services().get(cursor).map(|w| Screen::Workload(w.key.clone())),
@@ -47,6 +57,25 @@ impl App {
             Screen::Timeline { .. } => None,
         };
         target.map_or_else(Vec::new, |screen| self.open(screen))
+    }
+
+    /// Opens every group of the current grouping, or folds them all when all are open.
+    fn open_or_fold_all(&mut self) {
+        let names: Vec<String> = self
+            .app_rows()
+            .into_iter()
+            .filter_map(|r| match r {
+                AppRow::Group(g) => Some(g.name),
+                AppRow::App(_) => None,
+            })
+            .collect();
+        let by = self.grouping;
+        if names.iter().all(|n| self.open_groups.contains(&(by, n.clone()))) {
+            self.open_groups.retain(|(g, _)| *g != by);
+        } else {
+            self.open_groups.extend(names.into_iter().map(|n| (by, n)));
+        }
+        self.frame_mut().cursor = 0;
     }
 
     /// From a host or a service; a timeline has no timeline of its own.
@@ -157,9 +186,12 @@ impl App {
             Key::Char('t') => return self.timeline(),
             Key::Char('e') => match &self.frame().screen {
                 Screen::Host(h) => return self.open(Screen::Exceptions(h.clone())),
-                Screen::Apps => (self.all_envs, self.frame_mut().cursor) = (!self.all_envs, 0),
+                Screen::Apps => self.open_or_fold_all(),
                 _ => {}
             },
+            Key::Char('g') if self.frame().screen == Screen::Apps => {
+                (self.grouping, self.frame_mut().cursor) = (self.grouping.next(), 0);
+            }
             Key::Char('[') => return self.shift_window(-1),
             Key::Char(']') => return self.shift_window(1),
             Key::Esc | Key::Backspace => return self.back(),

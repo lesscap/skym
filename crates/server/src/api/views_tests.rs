@@ -183,6 +183,7 @@ fn summary(key: &str, status: Status) -> AppSummary {
         workloads: vec![],
         deploys: vec![],
         exceptions_1h: 0,
+        tags: vec![],
     }
 }
 
@@ -192,6 +193,7 @@ fn the_overview_lists_problems_flat_and_hosts_by_urgency() {
         id: id.into(),
         customer: customer.map(String::from),
         token_sha256: String::new(),
+        tags: vec![],
     };
     let cfg = ServerConfig {
         customers: vec![Customer { id: "acme".into(), name: "Acme".into() }],
@@ -260,7 +262,7 @@ fn a_host_overview_shows_its_resources_and_which_disk_fills_up() {
     .iter()
     .map(|i| Views::new().of(i, at(5)))
     .collect();
-    let h = host_overview(&"x".to_string(), Some(&r), &[], &open, at(5));
+    let h = host_overview(&"x".to_string(), &[], Some(&r), &[], &open, at(5));
     assert_eq!(h.load_1m, Some(r.state.load_1m));
     assert_eq!(h.memory_used_bytes, Some(r.state.memory_used_bytes));
     assert_eq!(h.memory_total_bytes, r.facts.as_ref().map(|f| f.memory_total_bytes));
@@ -302,11 +304,13 @@ fn a_host_overview_shows_its_resources_and_which_disk_fills_up() {
     let mut seen = r.clone();
     seen.remote_addr = Some("203.0.113.7".into());
     assert_eq!(
-        host_overview(&"x".to_string(), Some(&seen), &[], &[], at(5)).ip.as_deref(),
+        host_overview(&"x".to_string(), &[], Some(&seen), &[], &[], at(5)).ip.as_deref(),
         Some("203.0.113.7")
     );
-    let silent = host_overview(&"y".to_string(), None, &[], &[], at(5));
+    let tags = ["cn".to_string(), "acme".to_string(), "cn".to_string()];
+    let silent = host_overview(&"y".to_string(), &tags, None, &[], &[], at(5));
     assert_eq!((silent.status, silent.disks.len(), silent.load_1m), (Status::Unknown, 0, None));
+    assert_eq!(silent.tags, ["acme", "cn"], "sorted, once each, even before it reports");
 }
 
 #[test]
