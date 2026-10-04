@@ -48,6 +48,8 @@ Entity fields are defined in the [domain model](domain-model.md).
 
 When a source fails (for example, no access to the Docker socket), the report lists it in `errors`. The server then treats subjects missing from the report as unknown, not as recovered: their incidents stay as they are. `containers_listed` is narrower: it says every container was listed and inspected, so one missing from the report is gone. Only then does the server judge `APP_MISSING`; reports from agents older than the field read as `false`.
 
+`host_state` carries rates measured since the previous report: `cpu_percent`, `iowait_percent` and `steal_percent` (shares of all CPUs, 0–100, from `/proc/stat`), and `net_rx_bytes_per_s` and `net_tx_bytes_per_s` (from `/proc/net/dev`, at the interfaces backed by a device, so traffic is counted once where it enters or leaves the host; traffic that stays on the host is not counted). Each is `null` on the first report after the agent starts (a reboot included), across a gap of more than ten minutes, and when the host has no such interface. The agent reads only these kernel counters for them, with no extra processes or sampling; one it cannot read is logged and left `null`, and is not a collection error.
+
 A facts hash is the first 8 bytes of SHA-256 over the facts' JSON form, written as 16 lowercase hex characters. A string keeps it exact for every JSON consumer.
 
 `skym` does not know its host id; it fills every host field (`host`, workload keys) with its hostname, and the server replaces them all with the host id bound to the token.

@@ -13,7 +13,9 @@ ProtectSystem=strict
 NoNewPrivileges=true
 PrivateTmp=true
 Restart=always
-RestartSec=10
+# A restart is a full first pass (every container, an hour of events): never more often
+# than a normal pass, even if something keeps crashing.
+RestartSec=60
 # It runs on production hosts: never let it compete with the workloads it watches.
 Nice=10
 IOSchedulingClass=idle

@@ -3,6 +3,7 @@
 use crate::collect;
 use crate::config::Config;
 use crate::exceptions::Detail;
+use crate::memory::Memory;
 use crate::{report, status};
 use jiff::{SignedDuration, Timestamp};
 use skym_core::judge::{JudgeInput, Recent, judge};
@@ -82,9 +83,16 @@ fn indent(s: &str) -> String {
     s.lines().map(|l| format!("    {l}")).collect::<Vec<_>>().join("\n")
 }
 
+/// The report a pass would send. Rates are measured over the second before it, so they
+/// show the host, not this pass's own work.
 pub async fn report_dry_run(cfg: &Config) -> anyhow::Result<u8> {
+    let (before, _) = collect::host::counters();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let (after, _) = collect::host::counters();
     let now = Timestamp::now();
-    let (host, c) = collect::once(cfg, now, now - cfg.interval, Detail::Report).await;
+    let (host, mut c) = collect::once(cfg, now, now - cfg.interval, Detail::Report).await;
+    c.counters = after;
+    Memory::starting_from(before).rates(&mut c);
     println!("{}", serde_json::to_string_pretty(&report::build(&c, &host, now))?);
     Ok(status::exit_code(Status::Ok, !c.errors.is_empty(), c.all_failed))
 }

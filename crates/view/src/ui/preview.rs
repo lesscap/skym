@@ -125,6 +125,21 @@ pub fn app_count(n: usize) -> String {
     if n == 1 { "1 app".into() } else { format!("{n} apps") }
 }
 
+/// `23% busy · 4% iowait · load 0.93`; steal only from 1%, when a neighbour on the
+/// hypervisor is taking time.
+fn cpu_use(h: &HostOverview) -> String {
+    let parts: Vec<String> = [
+        h.cpu_percent.map(|p| format!("{p:.0}% busy")),
+        h.iowait_percent.map(|p| format!("{p:.0}% iowait")),
+        h.steal_percent.filter(|p| *p >= 1.0).map(|p| format!("{p:.0}% steal")),
+        Some(h.load_1m.map_or("load —".into(), |l| format!("load {l:.2}"))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    parts.join(" · ")
+}
+
 /// `tags     acme · billing`, when it has any.
 fn tags(tags: &[String], theme: Theme) -> Option<Line<'static>> {
     (!tags.is_empty()).then(|| Line::from(vec![label("tags", theme), Span::raw(tags.join(" · "))]))
@@ -220,6 +235,7 @@ fn host_line(h: &HostOverview, now: Timestamp) -> String {
     parts.extend(h.os.clone());
     parts.extend(h.ip.clone());
     parts.extend(h.boot_time.map(|t| format!("up {}", ago(now, t))));
+    parts.extend(h.cpu_percent.map(|p| format!("cpu {p:.0}%")));
     parts.extend(h.load_1m.map(|l| format!("load {l:.2}")));
     parts.push(format!("mem {}", memory(h.memory_used_bytes, h.memory_total_bytes)));
     let disks: Vec<String> =
@@ -327,14 +343,24 @@ pub fn host_body(app: &App, h: &HostOverview, now: Timestamp, theme: Theme) -> V
     let mut lines = vec![
         Line::from(vec![label("system", theme), Span::raw(system.join(" · "))]),
         Line::from(vec![
-            label("load", theme),
+            label("cpu", theme),
             Span::raw(format!(
                 "{}   memory {}",
-                h.load_1m.map_or("—".into(), |l| format!("{l:.2}")),
+                cpu_use(h),
                 memory(h.memory_used_bytes, h.memory_total_bytes)
             )),
         ]),
     ];
+    if let (Some(rx), Some(tx)) = (h.net_rx_bytes_per_s, h.net_tx_bytes_per_s) {
+        let rate = |b: u64| match b {
+            0..1000 => format!("{b}B/s"),
+            _ => format!("{}B/s", size(b)),
+        };
+        lines.push(Line::from(vec![
+            label("net", theme),
+            Span::raw(format!("↓ {}  ↑ {}", rate(rx), rate(tx))),
+        ]));
+    }
     let on_host: Vec<&AppSummary> =
         app.apps.value.iter().flat_map(|l| &l.apps).filter(|a| a.key.host == h.id).collect();
     lines.extend(tags(&h.tags, theme));

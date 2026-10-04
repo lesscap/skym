@@ -191,6 +191,17 @@ pub struct HostOverview {
     /// The address the host reports from, as the server sees it.
     #[serde(default)]
     pub ip: Option<String>,
+    /// As in `HostState`: shares of all CPUs, and bytes per second on physical interfaces.
+    #[serde(default)]
+    pub cpu_percent: Option<f32>,
+    #[serde(default)]
+    pub iowait_percent: Option<f32>,
+    #[serde(default)]
+    pub steal_percent: Option<f32>,
+    #[serde(default)]
+    pub net_rx_bytes_per_s: Option<u64>,
+    #[serde(default)]
+    pub net_tx_bytes_per_s: Option<u64>,
     /// From the configuration, sorted.
     #[serde(default)]
     pub tags: Vec<String>,

@@ -3,6 +3,7 @@ exclude_re = [
     "impl fmt::Display for (SubjectError|SinceError|ReportError)",
     # Reads of the real system, verified on real hosts rather than by unit tests:
     "host.rs.*replace hostname ->",
+    "host.rs.*(in|replace) (counters|physical_interfaces|read_parsed)\\b",
     "systemd.rs.*replace (collect|show) ->",
     "datastore.rs.*replace query_lag ->",
     "logs.rs.*(in|replace) read(_one|_tail)?\\b",

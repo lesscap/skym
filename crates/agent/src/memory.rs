@@ -2,6 +2,7 @@
 //! simply makes the next pass a first pass.
 
 use crate::collect::Collected;
+use crate::collect::host::{Counters, cpu_rates, net_rates};
 use jiff::{SignedDuration, Timestamp};
 use skym_core::model::LocalEvent;
 use skym_core::subject::WorkloadKey;
@@ -19,9 +20,15 @@ pub struct Memory {
     restarts: BTreeMap<WorkloadKey, BTreeSet<Timestamp>>,
     oom_kill_count: Option<u64>,
     unit_restart_counts: BTreeMap<WorkloadKey, u32>,
+    counters: Counters,
 }
 
 impl Memory {
+    /// A memory that has only seen these counters: for a one-off pass that still shows rates.
+    pub fn starting_from(counters: Counters) -> Memory {
+        Memory { counters, ..Memory::default() }
+    }
+
     /// Where this pass's container events start: 15 s before where the last successful
     /// query ended, and never more than an hour back (the whole hour at first).
     pub fn events_since(&self, now: Timestamp) -> Timestamp {
@@ -60,6 +67,28 @@ impl Memory {
         if c.events_read {
             self.until = Some(whole_second(now));
         }
+        self.rates(c);
+    }
+
+    /// CPU and network rates since the previous readings, into the host's state. A reading
+    /// that failed keeps the previous one, so the next rate spans both intervals.
+    pub fn rates(&mut self, c: &mut Collected) {
+        let (prev, cur) = (&self.counters, &c.counters);
+        if let Some((_, state)) = &mut c.host {
+            let cpu = prev.cpu.as_ref().zip(cur.cpu.as_ref()).and_then(|(p, n)| cpu_rates(p, n));
+            if let Some((busy, iowait, steal)) = cpu {
+                (state.cpu_percent, state.iowait_percent, state.steal_percent) =
+                    (Some(busy), Some(iowait), Some(steal));
+            }
+            let net = prev.net.as_ref().zip(cur.net.as_ref()).and_then(|(p, n)| net_rates(p, n));
+            if let Some((rx, tx)) = net {
+                (state.net_rx_bytes_per_s, state.net_tx_bytes_per_s) = (Some(rx), Some(tx));
+            }
+        }
+        self.counters = Counters {
+            cpu: cur.cpu.or(prev.cpu),
+            net: cur.net.clone().or_else(|| prev.net.clone()),
+        };
     }
 
     fn is_new(&self, t: &Timestamp) -> bool {

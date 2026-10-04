@@ -17,6 +17,8 @@ fn full_report_round_trips() {
     let report = load("report-full.json");
     let json = serde_json::to_string(&report).unwrap();
     assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
+    let s = &report.host_state;
+    assert_eq!((s.cpu_percent, s.net_tx_bytes_per_s), (Some(23.5), Some(310_000)));
 }
 
 #[test]
@@ -42,6 +44,11 @@ fn older_peer_minimal_report_parses() {
     assert!(report.host_facts.is_none());
     assert!(report.workloads.is_empty() && report.local_events.is_empty());
     assert!(report.host_state.mounts.is_empty());
+    assert_eq!(
+        (report.host_state.cpu_percent, report.host_state.net_rx_bytes_per_s),
+        (None, None),
+        "rates added later are unknown from an older agent"
+    );
     assert!(report.errors.is_empty(), "errors added later default to none");
     assert!(!report.containers_listed, "an older agent never claims a complete listing");
 }

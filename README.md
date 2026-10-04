@@ -40,7 +40,7 @@ Thresholds, severities, and when an incident opens or resolves are decided by sk
 
 ## A look
 
-`skym-view` opens on the problems tab: every open problem, named by its application (or by its host, for the host's own). New problems come first; `≥` means the problem was already there when skym started watching, so it has lasted at least that long. `⇥` moves to the applications and the hosts. Applications are grouped by environment, host or tag (`g`), each group folded to those in trouble; `/` filters by words and by `host:`, `env:`, `tag:` or `!ok`. Every application shows the memory its services use; `s` sorts by it, and a host's page names its largest users.
+`skym-view` opens on the problems tab: every open problem, named by its application (or by its host, for the host's own). New problems come first; `≥` means the problem was already there when skym started watching, so it has lasted at least that long. `⇥` moves to the applications and the hosts. Applications are grouped by environment, host or tag (`g`), each group folded to those in trouble; `/` filters by words and by `host:`, `env:`, `tag:` or `!ok`. Every application shows the memory its services use; `s` sorts by it, and a host's page names its largest users. Hosts show how busy their CPUs are (and iowait) and their network traffic.
 
 ```text
  skym · skym.example.com   [Problems]  Apps   Hosts      ✗ 1   ! 2             updated 3s ago

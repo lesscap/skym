@@ -58,6 +58,11 @@ fn host(id: &str) -> HostOverview {
         docker_version: None,
         agent_version: None,
         ip: None,
+        cpu_percent: None,
+        iowait_percent: None,
+        steal_percent: None,
+        net_rx_bytes_per_s: None,
+        net_tx_bytes_per_s: None,
         tags: vec![],
     }
 }
