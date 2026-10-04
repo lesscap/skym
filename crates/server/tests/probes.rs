@@ -21,10 +21,9 @@ use std::time::Duration;
 fn endpoint(url: &str, headers: &[(&str, &str)]) -> Endpoint {
     Endpoint {
         url: url.into(),
-        customer: "acme".into(),
         expect: vec![],
         headers: Headers(headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()),
-        app: None,
+        app: "x/shop".parse().unwrap(),
     }
 }
 

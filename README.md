@@ -40,44 +40,40 @@ Thresholds, severities, and when an incident opens or resolves are decided by sk
 
 ## A look
 
-The `skym-view` overview. New problems come first; `≥` means the problem was already there when skym started watching, so it has lasted at least that long:
+`skym-view` opens on the problems tab: every open problem, named by its application (or by its host, for the host's own). New problems come first; `≥` means the problem was already there when skym started watching, so it has lasted at least that long. `⇥` moves to the applications and the hosts.
 
 ```text
- skym · skym.example.com   ✗ 1 critical   ! 1 warn   ✓ 1 ok   updated 3s ago
-┌ Hosts ▪ ───────────────┐┌ Problems · all hosts ──────────────────────────────────────────┐
-│▸ All hosts             ││    NEW                                                         │
-│acme                    ││ ✗  web-1    api                exited (1), for 4m          4m  │
-│  ✗ web-1          12s  ││    ONGOING                                                     │
-│  ! db-1            8s  ││ !  db-1     postgres           replication lag 45s        ≥6h  │
-│  ✓ edge-1         21s  ││             · 2 hygiene items (h)                              │
-└────────────────────────┘└────────────────────────────────────────────────────────────────┘
- ↑↓ move  ⏎ open  ⇥ pane  / filter  h hygiene  m muted  r refresh  ? help  q quit
+ skym · skym.example.com   [Problems]  Apps   Hosts      ✗ 1   ! 2             updated 3s ago
+┌ Problems ──────────────────────────────────────────────────────────────────────────────┐
+│    NEW                                                                                 │
+│ ✗  Shop               web-1    api: exited (1), for 4m                             4m  │
+│    ONGOING                                                                             │
+│ !  Orders DB          db-1     postgres: replication lag 45s                      ≥6h  │
+│ !  host db-1          db-1     /data: full in ~6d                                  2h  │
+│                                · 2 hygiene items (h)                                   │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+ ↑↓ move  ⏎ open  ⇥ apps  / filter  h hygiene  m muted  r refresh  ? help  q quit
 ```
 
-The same problem, as an AI agent reads it from `GET /api/overview` (trimmed):
+The same problems, as an AI agent reads them from `GET /api/overview` (trimmed):
 
 ```json
 {
   "status": "critical",
-  "customers": [{
-    "id": "acme",
-    "hosts": [{
-      "id": "web-1",
-      "status": "critical",
-      "last_report_ago": "12s",
-      "incidents": [{
-        "subject": "workload:web-1/shop/api",
-        "code": "WORKLOAD_DOWN",
-        "severity": "critical",
-        "detail": "exited (1), for 4m",
-        "open_for": "4m",
-        "links": {
-          "workload": "/api/hosts/web-1/workloads/shop/api",
-          "timeline": "/api/timeline?host=web-1&workload=shop/api&since=6h"
-        }
-      }]
-    }]
-  }]
+  "problems": [{
+    "subject": "workload:web-1/shop/api",
+    "app": "web-1/shop",
+    "code": "WORKLOAD_DOWN",
+    "severity": "critical",
+    "detail": "exited (1), for 4m",
+    "open_for": "4m",
+    "links": {
+      "app": "/api/apps/web-1/shop",
+      "workload": "/api/hosts/web-1/workloads/shop/api",
+      "timeline": "/api/timeline?host=web-1&workload=shop/api&since=6h"
+    }
+  }],
+  "hosts": [{ "id": "web-1", "status": "critical", "last_report_ago": "12s", "apps": 4, "apps_in_trouble": 1 }]
 }
 ```
 

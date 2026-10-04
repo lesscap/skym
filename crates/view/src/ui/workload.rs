@@ -18,9 +18,8 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
     let Some(w) = &app.workload.value else {
         return f.render_widget(Paragraph::new(" loading…"), area);
     };
-    let observed = app.observed_since(&w.key.host);
     let code = |i: &skym_core::view::IncidentView| i.code.as_str().to_string();
-    let (problems, height) = problem_table(app, &w.incidents, observed, now, code, theme);
+    let (problems, height) = problem_table(app, &w.incidents, now, code, theme);
     let [head, problems_area, details, exceptions_area, events_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(height.min(8)),

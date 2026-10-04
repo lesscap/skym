@@ -11,9 +11,9 @@ use skym_core::model::RunState;
 use skym_core::report::Report;
 use skym_server::api::{AppState, router};
 use skym_server::config::{
-    AppConfig, AppProbe, Customer, Headers, HostEntry, Mute, Reader, ServerConfig, sha256_hex,
+    AppConfig, AppProbe, Headers, HostEntry, Mute, Reader, ServerConfig, sha256_hex,
 };
-use skym_server::evaluate::heartbeat_once;
+use skym_server::evaluate::{heartbeat_once, probes_once};
 use skym_server::{db, store::Store};
 use std::io::Write;
 use tower::ServiceExt;
@@ -33,10 +33,9 @@ fn app_configured(mute: Vec<Mute>, apps: Vec<AppConfig>) -> (Router, AppState) {
     let cfg = ServerConfig {
         mute,
         apps,
-        customers: vec![Customer { id: "acme".into(), name: "Acme".into() }],
         hosts: vec![HostEntry {
             id: "x".into(),
-            customer: "acme".into(),
+            customer: None,
             token_sha256: sha256_hex(HOST_TOKEN),
         }],
         readers: vec![Reader { name: "ops".into(), token_sha256: sha256_hex(READER_TOKEN) }],
@@ -167,12 +166,25 @@ async fn an_incident_from_reports_to_overview_workload_and_timeline() {
         assert_eq!(post(&app, &down(report(mins), 0)).await, StatusCode::OK);
     }
     let overview = get(&app, "/api/overview").await;
-    let incident = &overview["customers"][0]["hosts"][0]["incidents"][0];
+    let incident = &overview["problems"][0];
     assert_eq!(
-        (incident["code"].as_str(), incident["severity"].as_str()),
-        (Some("WORKLOAD_DOWN"), Some("critical"))
+        (incident["code"].as_str(), incident["severity"].as_str(), incident["app"].as_str()),
+        (Some("WORKLOAD_DOWN"), Some("critical"), Some("x/captain"))
     );
+    assert_eq!(incident["links"]["app"], "/api/apps/x/captain");
+    assert!(incident["observed_since"].is_string(), "since when skym watches its host");
     assert_eq!(overview["status"], "critical");
+    let hosts = get(&app, "/api/hosts").await;
+    let ids = |v: &Value| -> Vec<(String, String)> {
+        let list = v.as_array().unwrap().iter();
+        list.map(|h| (h["id"].to_string(), h["status"].to_string())).collect()
+    };
+    // Ages may tick between the two reads; the list is the same.
+    assert_eq!(ids(&hosts["hosts"]), ids(&overview["hosts"]), "the hosts tab reads the same list");
+    let x = &hosts["hosts"][0];
+    assert_eq!((x["id"].as_str(), x["status"].as_str()), (Some("x"), Some("critical")));
+    assert!(x["load_1m"].is_number() && x["disks"].as_array().is_some_and(|d| !d.is_empty()));
+    assert_eq!((x["apps"].as_u64(), x["apps_in_trouble"].as_u64()), (Some(3), Some(1)));
 
     let workload = get(&app, incident["links"]["workload"].as_str().unwrap()).await;
     assert_eq!(workload["status"], "critical");
@@ -270,7 +282,9 @@ async fn views_scope_incidents_and_ignore_muted_ones() {
     );
     assert_eq!(host["incidents"].as_array().unwrap().len(), 2, "but is listed");
 
-    assert_eq!(host["customer"], "acme");
+    let apps: Vec<&str> =
+        host["apps"].as_array().unwrap().iter().map(|a| a["key"].as_str().unwrap()).collect();
+    assert_eq!(apps, ["x/captain", "x/_systemd/xray", "x/pg"], "its apps, problems first");
     let api = get(&app, "/api/hosts/x/workloads/captain/api").await;
     assert_eq!(api["incidents"].as_array().unwrap().len(), 1, "only its own incident");
     assert_eq!(api["incidents"][0]["subject"], "workload:x/captain/api");
@@ -428,7 +442,7 @@ async fn applications_are_listed_described_and_missed() {
             headers: Headers([("Authorization".to_string(), "Bearer s3cret".to_string())].into()),
         }],
     };
-    let (app, _) = app_configured(vec![], vec![shop]);
+    let (app, state) = app_configured(vec![], vec![shop]);
     let listed = |mins_ago| Report { containers_listed: true, ..report(mins_ago) };
     assert_eq!(post(&app, &listed(3)).await, StatusCode::OK);
     let mut redeployed = listed(2);
@@ -451,8 +465,30 @@ async fn applications_are_listed_described_and_missed() {
     assert!(!list.to_string().contains("s3cret"), "a probe token never leaves the server");
 
     let overview = get(&app, "/api/overview").await;
-    let host = &overview["customers"][0]["hosts"][0];
-    assert!(host["incidents"].as_array().unwrap().iter().any(|i| i["subject"] == "app:x/shop"));
+    let gone =
+        overview["problems"].as_array().unwrap().iter().find(|i| i["subject"] == "app:x/shop");
+    assert_eq!(gone.map(|i| &i["app"]), Some(&"x/shop".into()), "a missing app is its own problem");
+
+    let probed = state.probed.clone();
+    for m in [2, 1] {
+        let at = Timestamp::now() - SignedDuration::from_mins(m);
+        let probe = skym_server::probe::Probe {
+            at,
+            response: Ok(503),
+            latency_ms: 40,
+            cert_not_after: None,
+        };
+        let (endpoints, pass) = (probed.clone(), vec![(probed[0].clone(), probe)]);
+        state.store.call(move |c| probes_once(c, &endpoints, &pass, at)).await.unwrap();
+    }
+    let overview = get(&app, "/api/overview").await;
+    let down =
+        overview["problems"].as_array().unwrap().iter().find(|i| i["code"] == "ENDPOINT_DOWN");
+    assert_eq!(down.map(|i| &i["app"]), Some(&"x/shop".into()), "a URL's problem is its app's");
+    let x = get(&app, "/api/hosts/x").await;
+    let codes: Vec<&str> =
+        x["incidents"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap()).collect();
+    assert!(!codes.contains(&"ENDPOINT_DOWN"), "not the host's: {codes:?}");
 
     let one = get(&app, missing["links"]["app"].as_str().unwrap()).await;
     assert_eq!(

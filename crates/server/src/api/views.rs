@@ -8,24 +8,38 @@ use crate::store::probes::ProbeRow;
 use jiff::{SignedDuration, Timestamp};
 use skym_core::model::{Event, ExceptionGroup};
 use skym_core::rules::{IncidentCode, Severity};
-use skym_core::subject::{AppKey, CustomerId, HostId, Subject, WorkloadKey, encode};
+use skym_core::subject::{AppKey, HostId, Subject, WorkloadKey, encode};
 use skym_core::time::format_duration;
 use skym_core::view::{
-    CustomerOverview, EndpointOverview, HostOverview, HostView, IncidentView, Overview, Status,
-    Timeline, TimelineEntry, TimelineKind, WorkloadView, rollup, workload_summary,
+    AppSummary, CustomerOverview, DiskUse, EndpointOverview, HostOverview, HostView, IncidentView,
+    Overview, Status, Timeline, TimelineEntry, TimelineKind, WorkloadView, rollup,
+    workload_summary,
 };
 use std::collections::BTreeMap;
 
-/// `stopped`: when stopped workloads stopped, for the real start of `WORKLOAD_DOWN`.
-pub fn incident_view(
-    i: &Incident,
-    mutes: &[Mute],
-    stopped: &BTreeMap<WorkloadKey, Timestamp>,
-    now: Timestamp,
-) -> IncidentView {
-    let mute = mutes.iter().find(|m| {
+/// What turns stored incidents into views.
+pub struct Context<'a> {
+    pub mutes: &'a [Mute],
+    /// When stopped workloads stopped, for the real start of `WORKLOAD_DOWN`.
+    pub stopped: &'a BTreeMap<WorkloadKey, Timestamp>,
+    /// Which application each probed URL belongs to.
+    pub probed: &'a [Endpoint],
+    /// When skym first heard from each host, and first probed each URL.
+    pub hosts_seen: &'a BTreeMap<HostId, Timestamp>,
+    pub urls_seen: &'a BTreeMap<String, Timestamp>,
+    pub now: Timestamp,
+}
+
+pub fn incident_view(i: &Incident, cx: &Context) -> IncidentView {
+    let now = cx.now;
+    let mute = cx.mutes.iter().find(|m| {
         m.subject == i.subject && m.code == i.code && m.until.is_none_or(|until| now < until)
     });
+    let app = app_of(&i.subject, cx.probed);
+    let mut links = links(&i.subject);
+    if let Some(a) = &app {
+        links.insert("app".to_string(), a.path());
+    }
     IncidentView {
         subject: i.subject.clone(),
         code: i.code,
@@ -36,7 +50,7 @@ pub fn incident_view(
             Subject::Workload(k)
                 if i.code == IncidentCode::WorkloadDown && i.state == State::Open =>
             {
-                stopped.get(k).copied()
+                cx.stopped.get(k).copied()
             }
             _ => None,
         },
@@ -47,7 +61,22 @@ pub fn incident_view(
         resolved_at: i.resolved_at,
         muted: mute.is_some(),
         mute_reason: mute.and_then(|m| m.reason.clone()),
-        links: links(&i.subject),
+        links,
+        observed_since: match &i.subject {
+            Subject::Endpoint(url) => cx.urls_seen.get(url).copied(),
+            s => s.host().and_then(|h| cx.hosts_seen.get(h)).copied(),
+        },
+        app,
+    }
+}
+
+/// The application an incident belongs to; `None` for a host's own problems.
+pub fn app_of(subject: &Subject, probed: &[Endpoint]) -> Option<AppKey> {
+    match subject {
+        Subject::Workload(k) => Some(AppKey::of(k)),
+        Subject::App(a) => Some(a.clone()),
+        Subject::Endpoint(url) => probed.iter().find(|e| e.url == *url).map(|e| e.app.clone()),
+        Subject::Host(_) | Subject::Mount { .. } | Subject::Unknown(_) => None,
     }
 }
 
@@ -94,13 +123,13 @@ pub fn status(incidents: &[IncidentView], known: bool) -> Status {
     if known { rollup(incidents) } else { Status::Unknown }
 }
 
-/// One host as stored; `row` is `None` until it first reports.
+/// One host as stored; `row` is `None` until it first reports. `apps` are its applications.
 pub fn host(
     id: HostId,
-    customer: Option<CustomerId>,
     row: Option<HostRow>,
     workloads: Vec<WorkloadRow>,
     incidents: Vec<IncidentView>,
+    apps: Vec<AppSummary>,
     now: Timestamp,
 ) -> HostView {
     let workloads = workloads
@@ -118,9 +147,10 @@ pub fn host(
         errors: row.as_ref().map(|r| r.errors.clone()).unwrap_or_default(),
         state: row.map(|r| r.state),
         id,
-        customer,
+        customer: None, // customers are gone; the field stays for older readers
         workloads,
         incidents,
+        apps,
     }
 }
 
@@ -143,68 +173,110 @@ pub fn workload(
     }
 }
 
-/// When skym first and last heard from a host.
-pub struct Seen {
-    pub first: Timestamp,
-    pub last: Timestamp,
+/// One host in a list: how it is doing, what it has left, and its applications. `row` is
+/// `None` until it first reports; `open` holds the open incidents, muted ones included.
+pub fn host_overview(
+    id: &HostId,
+    row: Option<&HostRow>,
+    apps: &[AppSummary],
+    open: &[IncidentView],
+    now: Timestamp,
+) -> HostOverview {
+    let mine: Vec<IncidentView> =
+        open.iter().filter(|i| !i.muted && i.subject.host() == Some(id)).cloned().collect();
+    let filling = |path: &str| {
+        mine.iter().any(|i| {
+            i.code == IncidentCode::DiskFilling
+                && matches!(&i.subject, Subject::Mount { path: p, .. } if p == path)
+        })
+    };
+    let disks = row.map_or_else(Vec::new, |r| {
+        r.state
+            .mounts
+            .iter()
+            .map(|m| DiskUse {
+                path: m.path.clone(),
+                used_percent: (m.used_bytes * 100).checked_div(m.total_bytes).unwrap_or(0) as u8,
+                filling: filling(&m.path),
+            })
+            .collect()
+    });
+    let own: Vec<&AppSummary> = apps.iter().filter(|a| a.key.host == *id).collect();
+    HostOverview {
+        id: id.clone(),
+        status: status(&mine, row.is_some()),
+        last_report_ago: row.map(|r| format_duration(now.duration_since(r.last_seen))),
+        observed_since: row.map(|r| r.first_seen),
+        info_count: mine.iter().filter(|i| i.severity == Severity::Info).count() as u32,
+        links: links(&Subject::Host(id.clone())),
+        load_1m: row.map(|r| r.state.load_1m),
+        memory_used_bytes: row.map(|r| r.state.memory_used_bytes),
+        memory_total_bytes: row.and_then(|r| r.facts.as_ref()).map(|f| f.memory_total_bytes),
+        disks,
+        apps: own.len() as u32,
+        apps_in_trouble: own.iter().filter(|a| a.status != Status::Ok).count() as u32,
+        incidents: mine,
+    }
 }
 
-/// Customers in configuration order; within each, the most urgent hosts and endpoints first.
+/// Every configured host, most urgent first.
+pub fn hosts(
+    cfg: &ServerConfig,
+    rows: &[HostRow],
+    apps: &[AppSummary],
+    open: &[IncidentView],
+    now: Timestamp,
+) -> Vec<HostOverview> {
+    let mut hosts: Vec<HostOverview> = cfg
+        .hosts
+        .iter()
+        .map(|h| host_overview(&h.id, rows.iter().find(|r| r.id == h.id), apps, open, now))
+        .collect();
+    hosts.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.id.cmp(&b.id)));
+    hosts
+}
+
+/// Where something is wrong: every open, unmuted problem, worst and oldest first, and every
+/// host. `customers` groups the hosts for views older than this.
 pub fn overview(
     cfg: &ServerConfig,
-    probed: &[Endpoint],
-    seen: &BTreeMap<HostId, Seen>,
-    probes: &BTreeMap<String, ProbeRow>,
+    rows: &[HostRow],
+    apps: &[AppSummary],
     open: &[IncidentView],
     now: Timestamp,
 ) -> Overview {
-    let customers: Vec<CustomerOverview> = cfg
+    let hosts = hosts(cfg, rows, apps, open, now);
+    let mut problems: Vec<IncidentView> = open.iter().filter(|i| !i.muted).cloned().collect();
+    problems
+        .sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.opened_at.cmp(&b.opened_at)));
+    let customers = cfg
         .customers
         .iter()
         .map(|c| {
-            let mut hosts: Vec<HostOverview> = cfg
-                .hosts
+            let theirs: Vec<HostOverview> = hosts
                 .iter()
-                .filter(|h| h.customer == c.id)
-                .map(|h| {
-                    let subject_host = |i: &&IncidentView| i.subject.host() == Some(&h.id);
-                    let mine: Vec<IncidentView> =
-                        open.iter().filter(subject_host).filter(|i| !i.muted).cloned().collect();
-                    let seen = seen.get(&h.id);
-                    HostOverview {
-                        id: h.id.clone(),
-                        status: status(&mine, seen.is_some()),
-                        last_report_ago: seen.map(|s| format_duration(now.duration_since(s.last))),
-                        observed_since: seen.map(|s| s.first),
-                        info_count: mine.iter().filter(|i| i.severity == Severity::Info).count()
-                            as u32,
-                        incidents: mine,
-                        links: links(&Subject::Host(h.id.clone())),
-                    }
+                .filter(|h| {
+                    cfg.hosts.iter().any(|e| e.id == h.id && e.customer.as_ref() == Some(&c.id))
                 })
+                .cloned()
                 .collect();
-            hosts.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.id.cmp(&b.id)));
-            let mut endpoints: Vec<EndpointOverview> = probed
-                .iter()
-                .filter(|e| e.customer == c.id)
-                .map(|e| endpoint(e, probes.get(&e.url), open, cfg.report_interval, now))
-                .collect();
-            endpoints.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.url.cmp(&b.url)));
-            let statuses = hosts.iter().map(|h| h.status).chain(endpoints.iter().map(|e| e.status));
             CustomerOverview {
                 id: c.id.clone(),
                 name: c.name.clone(),
-                status: statuses.max().unwrap_or(Status::Ok),
-                hosts,
-                endpoints,
+                status: theirs.iter().map(|h| h.status).max().unwrap_or(Status::Ok),
+                hosts: theirs,
+                endpoints: Vec::new(),
             }
         })
         .collect();
+    let worst = hosts.iter().map(|h| h.status).chain(std::iter::once(rollup(&problems)));
     Overview {
         ts: now,
-        status: customers.iter().map(|c| c.status).max().unwrap_or(Status::Ok),
+        status: worst.max().unwrap_or(Status::Ok),
         muted_count: open.iter().filter(|i| i.muted).count() as u32,
         customers,
+        problems,
+        hosts,
     }
 }
 
@@ -230,7 +302,7 @@ pub fn endpoint(
         latency_ms: answered.map(|r| r.probe.latency_ms),
         cert_expires_at: answered.and_then(|r| r.probe.cert_not_after),
         incidents: mine,
-        app: e.app.clone(),
+        app: Some(e.app.clone()),
     }
 }
 

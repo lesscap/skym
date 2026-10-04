@@ -353,6 +353,8 @@ fn incident(subject: Subject, severity: Severity, muted: bool) -> IncidentView {
         muted,
         mute_reason: None,
         links: BTreeMap::new(),
+        app: None,
+        observed_since: None,
     }
 }
 

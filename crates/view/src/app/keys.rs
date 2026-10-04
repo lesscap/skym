@@ -1,6 +1,6 @@
 //! Keys: moving, opening and leaving screens, filtering and toggles.
 
-use super::{App, Data, Frame, Key, Pane, Screen, WINDOWS};
+use super::{App, Data, Frame, Key, Screen, TABS, WINDOWS};
 use crate::api::Request;
 use jiff::Timestamp;
 use skym_core::subject::Subject;
@@ -12,9 +12,8 @@ impl App {
             Screen::Workload(_) => self.workload = Data::default(),
             Screen::Exceptions(_) => self.exceptions = Data::default(),
             Screen::Timeline { .. } => self.timeline = Data::default(),
-            Screen::Apps => self.apps = Data::default(),
             Screen::App(_) => self.app = Data::default(),
-            Screen::Overview => {}
+            Screen::Problems | Screen::Apps | Screen::Hosts => {}
         }
         let request = screen.request();
         self.filter = None;
@@ -24,28 +23,28 @@ impl App {
 
     fn enter(&mut self, now: Timestamp) -> Vec<Request> {
         let cursor = self.frame().cursor;
-        let target = match (&self.frame().screen, self.pane) {
-            (Screen::Overview, Pane::Hosts) => match self.picked() {
-                Some(Subject::Host(h)) => Some(Screen::Host(h)),
-                _ => None, // an endpoint has no screen of its own
-            },
-            (Screen::Overview, Pane::Problems) => {
-                self.problem_rows(now).get(cursor).and_then(|r| match &r.incident.subject {
-                    Subject::Workload(k) => Some(Screen::Workload(k.clone())),
-                    Subject::Endpoint(_) => None,
-                    _ => Some(Screen::Host(r.host.to_string())),
-                })
-            }
-            (Screen::Host(_) | Screen::App(_), _) => {
-                self.services().get(cursor).map(|w| Screen::Workload(w.key.clone()))
-            }
-            (Screen::Apps, _) => self.app_rows().get(cursor).map(|a| Screen::App(a.key.clone())),
-            (Screen::Workload(_) | Screen::Exceptions(_), _) => {
+        let target = match &self.frame().screen {
+            // Where the problem belongs: its service, its application, or its host.
+            Screen::Problems => self.problem_rows(now).get(cursor).and_then(|r| {
+                match (&r.incident.subject, r.app()) {
+                    (Subject::Workload(k), _) => Some(Screen::Workload(k.clone())),
+                    (Subject::Host(h) | Subject::Mount { host: h, .. }, _) => {
+                        Some(Screen::Host(h.clone()))
+                    }
+                    (_, Some(app)) => Some(Screen::App(app.clone())),
+                    (_, None) => None,
+                }
+            }),
+            Screen::Apps => self.app_rows().get(cursor).map(|a| Screen::App(a.key.clone())),
+            Screen::Hosts => self.host_rows().get(cursor).map(|h| Screen::Host(h.id.clone())),
+            Screen::Host(_) => self.host_apps().get(cursor).map(|a| Screen::App(a.key.clone())),
+            Screen::App(_) => self.services().get(cursor).map(|w| Screen::Workload(w.key.clone())),
+            Screen::Workload(_) | Screen::Exceptions(_) => {
                 let frame = self.frame_mut();
                 frame.expanded = (frame.expanded != Some(cursor)).then_some(cursor);
                 None
             }
-            (Screen::Timeline { .. }, _) => None,
+            Screen::Timeline { .. } => None,
         };
         target.map_or_else(Vec::new, |screen| self.open(screen))
     }
@@ -81,7 +80,7 @@ impl App {
         }
         self.stack.pop();
         let stale = match &self.frame().screen {
-            Screen::Overview | Screen::Apps => false,
+            Screen::Problems | Screen::Apps | Screen::Hosts => false,
             // Nothing held (its answer was dropped while away, or failed) is read again too.
             Screen::Host(h) => self.host.value.as_ref().is_none_or(|v| v.id != *h),
             Screen::Workload(k) => self.workload.value.as_ref().is_none_or(|v| v.key != *k),
@@ -97,36 +96,29 @@ impl App {
             Screen::App(_) => self.app = Data::default(),
             Screen::Exceptions(_) => self.exceptions = Data::default(),
             Screen::Timeline { .. } => self.timeline = Data::default(),
-            Screen::Overview | Screen::Apps => {}
+            Screen::Problems | Screen::Apps | Screen::Hosts => {}
         }
         self.frame().screen.request().into_iter().collect()
     }
 
-    /// The applications page, where it already is in the stack, else opened.
-    fn apps(&mut self) -> Vec<Request> {
-        match self.stack.iter().position(|f| f.screen == Screen::Apps) {
-            Some(i) => {
-                self.stack.truncate(i + 1);
-                self.filter = None;
-                vec![Request::Apps]
-            }
-            None => self.open(Screen::Apps),
-        }
+    /// The next tab, as the new root: what was open on the previous one is left.
+    fn next_tab(&mut self) -> Vec<Request> {
+        let at = TABS.iter().position(|t| t == self.tab()).unwrap_or(0);
+        let screen = TABS[(at + 1) % TABS.len()].clone();
+        // Problems and hosts come with the overview; only the apps tab may not be read yet.
+        let request = screen.request().filter(|_| self.apps.value.is_none());
+        self.stack = vec![Frame { screen, cursor: 0, expanded: None }];
+        self.filter = None;
+        request.into_iter().collect()
     }
 
     fn step(&mut self, down: bool, now: Timestamp) {
         let rows = self.rows(now);
-        let cursor = match (&self.frame().screen, self.pane) {
-            (Screen::Overview, Pane::Hosts) => &mut self.host_cursor,
-            _ => &mut self.frame_mut().cursor,
-        };
+        let cursor = &mut self.frame_mut().cursor;
         *cursor = match down {
             true => (*cursor + 1).min(rows.saturating_sub(1)),
             false => cursor.saturating_sub(1),
         };
-        if self.frame().screen == Screen::Overview && self.pane == Pane::Hosts {
-            self.frame_mut().cursor = 0; // another host's problems
-        }
     }
 
     pub(super) fn key(&mut self, key: Key, now: Timestamp) -> Vec<Request> {
@@ -147,7 +139,6 @@ impl App {
                 _ => {}
             }
             self.frame_mut().cursor = 0;
-            self.clamp_host_cursor();
             return Vec::new();
         }
         match key {
@@ -168,20 +159,10 @@ impl App {
                 Screen::Apps => (self.all_envs, self.frame_mut().cursor) = (!self.all_envs, 0),
                 _ => {}
             },
-            Key::Char('a') if self.frame().screen != Screen::Apps => return self.apps(),
             Key::Char('[') => return self.shift_window(-1),
             Key::Char(']') => return self.shift_window(1),
-            Key::Esc | Key::Backspace => {
-                let requests = self.back();
-                self.clamp_host_cursor();
-                return requests;
-            }
-            Key::Tab if self.frame().screen == Screen::Overview => {
-                self.pane = match self.pane {
-                    Pane::Hosts => Pane::Problems,
-                    Pane::Problems => Pane::Hosts,
-                };
-            }
+            Key::Esc | Key::Backspace => return self.back(),
+            Key::Tab => return self.next_tab(),
             Key::Down | Key::Char('j') => self.step(true, now),
             Key::Up | Key::Char('k') => self.step(false, now),
             Key::Enter => return self.enter(now),

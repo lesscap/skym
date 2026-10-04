@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use skym_core::model::RunState;
 use skym_core::rules::IncidentCode;
 use skym_core::subject::{AppKey, Subject, WorkloadKey, encode};
-use skym_core::view::{AppSummary, EndpointOverview, IncidentView};
+use skym_core::view::{AppSummary, EndpointOverview, IncidentView, Status};
 use std::collections::BTreeMap;
 
 /// Every application: those with workloads, and configured ones without any. Most urgent
@@ -55,7 +55,13 @@ fn summary(
         env: config.and_then(|c| c.env.clone()),
         note: config.and_then(|c| c.note.clone()),
         configured: config.is_some(),
-        status: status(&incidents, !rows.is_empty() || !incidents.is_empty()),
+        // Known by its services, its problems, or (an external one) its URLs' answers.
+        status: status(
+            &incidents,
+            !rows.is_empty()
+                || !incidents.is_empty()
+                || endpoints.iter().any(|e| e.status != Status::Unknown),
+        ),
         services: rows.len() as u32,
         running: rows.iter().filter(|w| w.state.run == RunState::Running).count() as u32,
         last_deployed: rows.iter().filter_map(|w| deployed.get(&w.key)).max().copied(),

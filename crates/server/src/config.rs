@@ -6,7 +6,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use skym_core::rules::IncidentCode;
-use skym_core::subject::{AppKey, CustomerId, HostId, Subject};
+use skym_core::subject::{AppKey, CustomerId, EXTERNAL, HostId, Subject};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
@@ -19,11 +19,13 @@ pub struct ServerConfig {
     pub database: PathBuf,
     /// Must match the agents' interval: heartbeat timeout is three of them.
     pub report_interval: SignedDuration,
+    /// Optional, kept for the per-customer grouping older views read; tags will replace it.
     pub customers: Vec<Customer>,
     pub hosts: Vec<HostEntry>,
     pub readers: Vec<Reader>,
     pub mute: Vec<Mute>,
-    pub endpoints: Vec<Endpoint>,
+    /// No longer accepted (URLs belong to applications); read only to say so.
+    pub endpoints: Vec<toml::Table>,
     pub apps: Vec<AppConfig>,
 }
 
@@ -52,7 +54,8 @@ pub struct Customer {
 #[derive(Deserialize, Debug, Clone)]
 pub struct HostEntry {
     pub id: HostId,
-    pub customer: CustomerId,
+    #[serde(default)]
+    pub customer: Option<CustomerId>,
     pub token_sha256: String,
 }
 
@@ -70,19 +73,14 @@ pub struct Mute {
     pub until: Option<Timestamp>,
 }
 
-/// A URL the server probes. `expect` replaces the default "below 400" when set; `headers`
-/// may hold a token for the probe, so their values never leave the configuration.
-#[derive(Deserialize, Debug, Clone)]
+/// A URL the server probes, one of an application's. `expect` replaces the default "below
+/// 400" when set; `headers` may hold a token, so their values never leave the configuration.
+#[derive(Debug, Clone)]
 pub struct Endpoint {
     pub url: String,
-    pub customer: CustomerId,
-    #[serde(default)]
     pub expect: Vec<u16>,
-    #[serde(default)]
     pub headers: Headers,
-    /// Set for an application's probe (see `ServerConfig::probed`), never in `[[endpoints]]`.
-    #[serde(skip)]
-    pub app: Option<AppKey>,
+    pub app: AppKey,
 }
 
 /// Request headers of a probe. They may hold a token, so `Debug` shows only their names.
@@ -115,7 +113,7 @@ pub struct AppConfig {
     pub probes: Vec<AppProbe>,
 }
 
-/// One of an application's URLs; its customer is its host's.
+/// One of an application's URLs.
 #[derive(Deserialize, Debug, Clone)]
 pub struct AppProbe {
     pub url: String,
@@ -126,20 +124,19 @@ pub struct AppProbe {
 }
 
 impl ServerConfig {
-    /// Every URL to probe: `[[endpoints]]`, then each application's probes.
+    /// Every URL to probe: the applications' probes.
     pub fn probed(&self) -> Vec<Endpoint> {
-        let customer =
-            |host: &str| self.hosts.iter().find(|h| h.id == host).map(|h| h.customer.clone());
-        let of_apps = self.apps.iter().flat_map(|a| {
-            a.probes.iter().map(|p| Endpoint {
-                url: p.url.clone(),
-                customer: customer(&a.id.host).unwrap_or_default(),
-                expect: p.expect.clone(),
-                headers: p.headers.clone(),
-                app: Some(a.id.clone()),
+        self.apps
+            .iter()
+            .flat_map(|a| {
+                a.probes.iter().map(|p| Endpoint {
+                    url: p.url.clone(),
+                    expect: p.expect.clone(),
+                    headers: p.headers.clone(),
+                    app: a.id.clone(),
+                })
             })
-        });
-        self.endpoints.iter().cloned().chain(of_apps).collect()
+            .collect()
     }
 }
 
@@ -163,14 +160,20 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
     if !cfg.report_interval.is_positive() {
         bail!("report_interval must be positive");
     }
+    if !cfg.endpoints.is_empty() {
+        bail!(
+            "[[endpoints]] is no longer read: move each URL under the [[apps.probes]] of its \
+             application (an external application, id = \"external/<name>\", for third-party URLs)"
+        );
+    }
     let customers: BTreeSet<&str> = cfg.customers.iter().map(|c| c.id.as_str()).collect();
     let mut ids = BTreeSet::new();
     for h in &cfg.hosts {
-        if h.id.is_empty() || h.id.contains(['/', ':']) || !ids.insert(&h.id) {
-            bail!("host id {:?} is empty, contains / or :, or is repeated", h.id);
+        if h.id.is_empty() || h.id.contains(['/', ':']) || h.id == EXTERNAL || !ids.insert(&h.id) {
+            bail!("host id {:?} is empty, contains / or :, is \"external\" or is repeated", h.id);
         }
-        if !customers.contains(h.customer.as_str()) {
-            bail!("host {:?} names unknown customer {:?}", h.id, h.customer);
+        if let Some(c) = h.customer.as_ref().filter(|c| !customers.contains(c.as_str())) {
+            bail!("host {:?} names unknown customer {c:?}", h.id);
         }
     }
     let hashes = cfg
@@ -192,8 +195,12 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
     }
     let mut apps = BTreeSet::new();
     for a in &cfg.apps {
-        if !cfg.hosts.iter().any(|h| h.id == a.id.host) || !apps.insert(&a.id) {
+        let known = a.id.is_external() || cfg.hosts.iter().any(|h| h.id == a.id.host);
+        if !known || !apps.insert(&a.id) {
             bail!("app {} is on an unknown host or listed twice", a.id);
+        }
+        if a.id.is_external() && a.probes.is_empty() {
+            bail!("external app {} has no probes: there is nothing to watch", a.id);
         }
     }
     if let Some(m) = cfg.mute.iter().find(|m| matches!(m.subject, Subject::Unknown(_))) {
@@ -201,7 +208,7 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
     }
     let mut urls = BTreeSet::new();
     for e in &cfg.probed() {
-        let url = validate_endpoint(e, &customers)?;
+        let url = validate_endpoint(e)?;
         if !urls.insert(url) {
             bail!("endpoint {} is listed twice", e.url);
         }
@@ -210,16 +217,13 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
 }
 
 /// The URL as parsed: `https://a.example` and `https://a.example/` are one endpoint.
-fn validate_endpoint(e: &Endpoint, customers: &BTreeSet<&str>) -> anyhow::Result<reqwest::Url> {
+fn validate_endpoint(e: &Endpoint) -> anyhow::Result<reqwest::Url> {
     let url = reqwest::Url::parse(&e.url).with_context(|| format!("endpoint {}", e.url))?;
     if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
         bail!("endpoint {} is not an http(s) URL with a host", e.url);
     }
     if !url.username().is_empty() || url.password().is_some() {
         bail!("endpoint {} has credentials in the URL; use headers", e.url);
-    }
-    if !customers.contains(e.customer.as_str()) {
-        bail!("endpoint {} names unknown customer {:?}", e.url, e.customer);
     }
     if let Some(s) = e.expect.iter().find(|s| !(100..=599).contains(*s)) {
         bail!("endpoint {} expects {s}, which is not an HTTP status", e.url);
@@ -294,100 +298,75 @@ mod tests {
         }
     }
 
-    fn endpoint(fields: &str) -> String {
-        config(&format!("[[endpoints]]\ncustomer = \"acme\"\n{fields}\n"))
-    }
-
-    #[test]
-    fn endpoints_parse_and_keep_their_headers_out_of_debug() {
-        let cfg = parse(&endpoint(
-            "url = \"https://shop.example.com/healthz\"\nexpect = [401]\nheaders = { Authorization = \"Bearer s3cret\" }",
-        ))
-        .unwrap();
-        let e = &cfg.endpoints[0];
-        assert_eq!(
-            (e.expect.as_slice(), e.headers["Authorization"].as_str()),
-            ([401].as_slice(), "Bearer s3cret")
-        );
-        let shown = format!("{cfg:?}");
-        assert!(shown.contains("Authorization") && !shown.contains("s3cret"), "{shown}");
-        assert!(parse(&endpoint("url = \"http://10.0.0.5:8080/\"")).is_ok());
-    }
-
-    #[test]
-    fn invalid_endpoints_are_rejected() {
-        let cases = [
-            endpoint("url = \"not a url\""),
-            endpoint("url = \"ftp://shop.example.com/\""),
-            endpoint("url = \"https://user:pw@shop.example.com/\""),
-            endpoint("url = \"https://user@shop.example.com/\""),
-            endpoint("url = \"https://shop.example.com/\"\nexpect = [99]"),
-            endpoint("url = \"https://shop.example.com/\"\nexpect = [600]"),
-            endpoint("url = \"https://shop.example.com/\"\nheaders = { \"Bad Name\" = \"x\" }"),
-            endpoint("url = \"https://shop.example.com/\"\nheaders = { X-Token = \"a\\nb\" }"),
-            config("[[endpoints]]\nurl = \"https://a.example/\"\ncustomer = \"nobody\"\n"),
-            endpoint(
-                "url = \"https://a.example\"\n[[endpoints]]\nurl = \"https://a.example/\"\ncustomer = \"acme\"",
-            ),
-        ];
-        for text in &cases {
-            assert!(parse(text).is_err(), "should be rejected:\n{text}");
-        }
-        let broken = endpoint("url = \"https://a.example/\"\nheaders = { X-Token = \"s3cret\" ");
-        let err = parse(&broken).unwrap_err();
-        assert!(!format!("{err:#}").contains("s3cret"), "a syntax error does not quote the line");
-        assert!(format!("{err:#}").contains("(line "), "{err:#}");
-        let err =
-            parse(&endpoint("url = \"https://a.example/\"\nheaders = { X-Token = \"s3cret\\n\" }"))
-                .unwrap_err();
-        assert!(!format!("{err:#}").contains("s3cret"), "a bad value is never echoed");
-    }
-
     fn with_app(app: &str) -> String {
         config(&(host("x", "acme", &hash('a')) + app))
     }
 
+    /// One probe of app x/shop with these fields.
+    fn probe(fields: &str) -> String {
+        with_app(&format!("[[apps]]\nid = \"x/shop\"\n[[apps.probes]]\n{fields}\n"))
+    }
+
     #[test]
-    fn apps_parse_and_their_probes_join_the_endpoints() {
+    fn apps_and_their_probes_parse_and_keep_headers_out_of_debug() {
         let cfg = parse(&with_app(
             "[[apps]]\nid = \"x/shop\"\nname = \"Shop\"\nenv = \"prod\"\n\
-             [[apps.probes]]\nurl = \"https://shop.example.com/healthz\"\n\
+             [[apps.probes]]\nurl = \"https://shop.example.com/healthz\"\nexpect = [401]\n\
              headers = { Authorization = \"Bearer s3cret\" }\n\
              [[apps]]\nid = \"x/-/redis\"\n\
-             [[endpoints]]\nurl = \"https://partner.example.com/\"\ncustomer = \"acme\"\n",
+             [[apps]]\nid = \"external/partner\"\n\
+             [[apps.probes]]\nurl = \"http://10.0.0.5:8080/\"\n",
         ))
         .unwrap();
         let probed = cfg.probed();
-        let summary: Vec<(&str, &str, Option<String>)> = probed
-            .iter()
-            .map(|e| (e.url.as_str(), e.customer.as_str(), e.app.as_ref().map(ToString::to_string)))
-            .collect();
+        let summary: Vec<(&str, String)> =
+            probed.iter().map(|e| (e.url.as_str(), e.app.to_string())).collect();
         assert_eq!(
             summary,
             [
-                ("https://partner.example.com/", "acme", None),
-                ("https://shop.example.com/healthz", "acme", Some("x/shop".into())),
-            ],
-            "an app's probe takes its host's customer"
+                ("https://shop.example.com/healthz", "x/shop".into()),
+                ("http://10.0.0.5:8080/", "external/partner".into()),
+            ]
         );
-        assert_eq!(probed[1].headers["Authorization"], "Bearer s3cret");
+        assert_eq!(
+            (probed[0].expect.as_slice(), probed[0].headers["Authorization"].as_str()),
+            ([401].as_slice(), "Bearer s3cret")
+        );
         let shown = format!("{cfg:?}");
         assert!(shown.contains("Authorization") && !shown.contains("s3cret"), "{shown}");
     }
 
     #[test]
-    fn invalid_apps_are_rejected() {
+    fn customers_are_optional_and_endpoints_point_to_apps() {
+        let bare = format!("[[hosts]]\nid = \"x\"\ntoken_sha256 = \"{}\"\n", hash('a'));
+        assert!(parse(&bare).unwrap().hosts[0].customer.is_none());
+        let old = with_app("[[endpoints]]\nurl = \"https://a.example/\"\ncustomer = \"acme\"\n");
+        let err = format!("{:#}", parse(&old).unwrap_err());
+        assert!(err.contains("[[apps.probes]]") && err.contains("external"), "{err}");
+    }
+
+    #[test]
+    fn invalid_apps_and_probes_are_rejected() {
         let cases = [
             with_app("[[apps]]\nid = \"x\"\n"),
             with_app("[[apps]]\nid = \"x/-\"\n"),
             with_app("[[apps]]\nid = \"y/shop\"\n"),
             with_app("[[apps]]\nid = \"x/shop\"\n[[apps]]\nid = \"x/shop\"\n"),
-            with_app(
-                "[[apps]]\nid = \"x/shop\"\n[[apps.probes]]\nurl = \"https://a.example/\"\n\
-                 [[endpoints]]\nurl = \"https://a.example\"\ncustomer = \"acme\"\n",
-            ),
-            with_app("[[apps]]\nid = \"x/shop\"\n[[apps.probes]]\nurl = \"ftp://a.example/\"\n"),
+            with_app("[[apps]]\nid = \"external/partner\"\n"),
+            config(&host("external", "acme", &hash('a'))),
+            config(&host("x", "nobody", &hash('a'))),
             with_app("[[mute]]\nsubject = \"queue:mail\"\ncode = \"WORKLOAD_DOWN\"\n"),
+            probe("url = \"not a url\""),
+            probe("url = \"ftp://shop.example.com/\""),
+            probe("url = \"https://user:pw@shop.example.com/\""),
+            probe("url = \"https://user@shop.example.com/\""),
+            probe("url = \"https://shop.example.com/\"\nexpect = [99]"),
+            probe("url = \"https://shop.example.com/\"\nexpect = [600]"),
+            probe("url = \"https://shop.example.com/\"\nheaders = { \"Bad Name\" = \"x\" }"),
+            probe("url = \"https://shop.example.com/\"\nheaders = { X-Token = \"a\\nb\" }"),
+            probe(
+                "url = \"https://a.example\"\n[[apps]]\nid = \"x/blog\"\n[[apps.probes]]\nurl = \"https://a.example/\"",
+            ),
         ];
         for text in &cases {
             assert!(parse(text).is_err(), "should be rejected:\n{text}");
@@ -396,6 +375,14 @@ mod tests {
             parse(&with_app("[[mute]]\nsubject = \"app:x/shop\"\ncode = \"APP_MISSING\"\n"))
                 .is_ok()
         );
+        let broken = probe("url = \"https://a.example/\"\nheaders = { X-Token = \"s3cret\" ");
+        let err = parse(&broken).unwrap_err();
+        assert!(!format!("{err:#}").contains("s3cret"), "a syntax error does not quote the line");
+        assert!(format!("{err:#}").contains("(line "), "{err:#}");
+        let err =
+            parse(&probe("url = \"https://a.example/\"\nheaders = { X-Token = \"s3cret\\n\" }"))
+                .unwrap_err();
+        assert!(!format!("{err:#}").contains("s3cret"), "a bad value is never echoed");
     }
 
     #[test]

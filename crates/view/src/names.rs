@@ -26,19 +26,13 @@ pub fn short(subject: &Subject) -> String {
     }
 }
 
-/// The service alone, where a host column already says where it runs.
-pub fn service(subject: &Subject) -> String {
+/// The thing a problem is about, for the problems tab: the service, the URL, the mount;
+/// nothing when the row already names it (an application, a host).
+pub fn what(subject: &Subject) -> String {
     match subject {
         Subject::Workload(k) => k.service.clone(),
-        other => short(other),
-    }
-}
-
-/// How the overview's left pane names a host or an endpoint.
-pub fn target(subject: &Subject) -> String {
-    match subject {
-        Subject::Host(h) => h.clone(),
-        other => short(other),
+        Subject::Endpoint(_) | Subject::Mount { .. } => short(subject),
+        Subject::Host(_) | Subject::App(_) | Subject::Unknown(_) => String::new(),
     }
 }
 
@@ -50,22 +44,22 @@ mod tests {
     fn three_ways_to_name_a_subject() {
         let named = |s: &str| {
             let s: Subject = s.parse().unwrap();
-            (full(&s), short(&s), service(&s))
+            (full(&s), short(&s))
         };
-        let triple = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
-        assert_eq!(named("workload:x/app/api"), triple("app/api", "app/api", "api"));
-        assert_eq!(named("workload:x/-/redis"), triple("-/redis", "redis", "redis"));
-        assert_eq!(named("workload:x/_systemd/xray"), triple("_systemd/xray", "xray", "xray"));
-        assert_eq!(named("mount:x:/data"), triple("/data", "/data", "/data"));
-        assert_eq!(named("host:x"), triple("host", "host", "host"));
+        let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(named("workload:x/app/api"), pair("app/api", "app/api"));
+        assert_eq!(named("workload:x/-/redis"), pair("-/redis", "redis"));
+        assert_eq!(named("workload:x/_systemd/xray"), pair("_systemd/xray", "xray"));
+        assert_eq!(named("mount:x:/data"), pair("/data", "/data"));
+        assert_eq!(named("host:x"), pair("host", "host"));
         let url = "https://shop.example.com/";
-        assert_eq!(
-            named(&format!("endpoint:{url}")),
-            triple(url, "shop.example.com", "shop.example.com")
-        );
+        assert_eq!(named(&format!("endpoint:{url}")), pair(url, "shop.example.com"));
         let path = "http://10.0.0.5:8080/healthz";
         assert_eq!(named(&format!("endpoint:{path}")).1, "10.0.0.5:8080/healthz");
-        assert_eq!(target(&"host:x".parse().unwrap()), "x");
-        assert_eq!(target(&format!("endpoint:{url}").parse().unwrap()), "shop.example.com");
+        let what = |s: &str| what(&s.parse().unwrap());
+        assert_eq!(what("workload:x/app/api"), "api");
+        assert_eq!(what(&format!("endpoint:{url}")), "shop.example.com");
+        assert_eq!(what("mount:x:/data"), "/data");
+        assert_eq!((what("host:x"), what("app:x/shop")), (String::new(), String::new()));
     }
 }

@@ -2,13 +2,14 @@
 
 mod apps;
 mod host;
-mod overview;
+mod hosts;
+mod problems;
 mod timeline;
 mod workload;
 
 use crate::api::FetchError;
-use crate::app::{App, Screen};
-use crate::problems::{self, Age};
+use crate::app::{App, Screen, TABS};
+use crate::problems::Age;
 use jiff::Timestamp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -69,7 +70,8 @@ pub fn draw(f: &mut Frame, app: &App, server: &str, now: Timestamp, theme: Theme
             .areas(f.area());
     f.render_widget(top_bar(app, server, now, theme), top);
     match &app.frame().screen {
-        Screen::Overview => overview::draw(f, body, app, now, theme),
+        Screen::Problems => problems::draw(f, body, app, now, theme),
+        Screen::Hosts => hosts::draw(f, body, app, theme),
         Screen::Host(_) => host::draw(f, body, app, now, theme),
         Screen::Workload(_) => workload::draw(f, body, app, now, theme),
         Screen::Exceptions(h) => workload::exceptions(f, body, app, h, now, theme),
@@ -89,19 +91,37 @@ fn top_bar(app: &App, server: &str, now: Timestamp, theme: Theme) -> Paragraph<'
         Span::styled(" skym", Style::new().add_modifier(Modifier::BOLD)),
         Span::raw(format!(" · {host}   ")),
     ];
-    if let Some(o) = &app.overview.value {
-        let targets: Vec<Status> = o
-            .customers
-            .iter()
-            .flat_map(|c| {
-                c.hosts.iter().map(|h| h.status).chain(c.endpoints.iter().map(|e| e.status))
-            })
-            .collect();
-        for status in [Status::Critical, Status::Unknown, Status::Warn, Status::Ok] {
-            let n = targets.iter().filter(|s| **s == status).count();
+    for tab in TABS {
+        let name = match tab {
+            Screen::Problems => "Problems",
+            Screen::Apps => "Apps",
+            _ => "Hosts",
+        };
+        spans.push(match *app.tab() == tab {
+            true => Span::styled(format!("[{name}] "), Style::new().add_modifier(Modifier::BOLD)),
+            false => Span::styled(format!(" {name}  "), theme.dim()),
+        });
+    }
+    spans.push(Span::raw("    "));
+    // A server older than `problems` and `hosts` would look like a calm fleet: say so.
+    let older =
+        app.overview.value.as_ref().is_some_and(|o| o.hosts.is_empty() && !o.customers.is_empty());
+    if older {
+        spans.push(Span::styled(
+            "the server is older than this view: upgrade it   ",
+            theme.fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(o) = &app.overview.value {
+        // Open problems by severity, and hosts nobody has heard from.
+        let count = |s: Severity| o.problems.iter().filter(|i| i.severity == s).count();
+        let unknown = o.hosts.iter().filter(|h| h.status == Status::Unknown).count();
+        for (n, mark) in [
+            (count(Severity::Critical), theme.status(Status::Critical)),
+            (count(Severity::Warn), theme.status(Status::Warn)),
+            (unknown, theme.status(Status::Unknown)),
+        ] {
             if n > 0 {
-                let name = format!("{status:?}").to_lowercase();
-                spans.extend([theme.status(status), Span::raw(format!(" {n} {name}   "))]);
+                spans.extend([mark, Span::raw(format!(" {n}   "))]);
             }
         }
     }
@@ -134,14 +154,13 @@ fn bottom_bar(app: &App, theme: Theme) -> Paragraph<'static> {
         return Paragraph::new(format!(" /{text}{cursor}   esc clear"));
     }
     let keys = match &app.frame().screen {
-        Screen::Overview => {
-            "↑↓ move  ⏎ open  ⇥ pane  a apps  / filter  h hygiene  m muted  r refresh  ? help  q quit"
+        Screen::Problems => {
+            "↑↓ move  ⏎ open  ⇥ apps  / filter  h hygiene  m muted  r refresh  ? help  q quit"
         }
-        Screen::Apps => "↑↓ move  ⏎ open  e all environments  / filter  esc back  ? help",
-        Screen::App(_) => "↑↓ move  ⏎ service  / filter  esc back  ? help",
-        Screen::Host(_) => {
-            "↑↓ move  ⏎ service  t timeline  e exceptions  / filter  esc back  ? help"
-        }
+        Screen::Apps => "↑↓ move  ⏎ open  ⇥ hosts  e all environments  / filter  ? help  q quit",
+        Screen::Hosts => "↑↓ move  ⏎ open  ⇥ problems  / filter  r refresh  ? help  q quit",
+        Screen::App(_) => "↑↓ move  ⏎ service  ⇥ next tab  / filter  esc back  ? help",
+        Screen::Host(_) => "↑↓ move  ⏎ app  t timeline  e exceptions  / filter  esc back  ? help",
         Screen::Workload(_) => "↑↓ move  ⏎ expand exception  t timeline  esc back  ? help",
         Screen::Exceptions(_) => "↑↓ move  ⏎ expand  esc back  ? help",
         Screen::Timeline { .. } => "↑↓ move  [ ] window  esc back  ? help",
@@ -154,9 +173,8 @@ fn help(f: &mut Frame, theme: Theme) {
         "↑↓ j k     move",
         "⏎          open / expand",
         "esc ⌫      back (or clear the filter)",
-        "⇥          switch pane (overview)",
+        "⇥          next tab: problems, apps, hosts",
         "/          filter by name",
-        "a          applications",
         "t          timeline (host, service)",
         "e          exceptions (host); all environments (applications)",
         "[ ]        timeline window: 6h 24h 7d",
@@ -225,7 +243,6 @@ fn event(kind: &skym_core::model::EventKind) -> String {
 fn problem_table<'a>(
     app: &App,
     incidents: &'a [IncidentView],
-    observed_since: Option<Timestamp>,
     now: Timestamp,
     name: impl Fn(&IncidentView) -> String,
     theme: Theme,
@@ -244,7 +261,9 @@ fn problem_table<'a>(
                 Cell::from(Line::from(vec![Span::raw(" "), theme.severity(i.severity)])),
                 Cell::from(name(i)),
                 Cell::from(reason(&i.detail)),
-                Cell::from(Line::from(age(problems::age(i, observed_since, now))).right_aligned()),
+                Cell::from(
+                    Line::from(age(crate::problems::age(i, i.observed_since, now))).right_aligned(),
+                ),
             ])
         })
         .collect();

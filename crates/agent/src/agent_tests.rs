@@ -19,11 +19,7 @@ const TOKEN: &str = "host-x-token";
 fn state() -> AppState {
     let cfg = ServerConfig {
         customers: vec![Customer { id: "acme".into(), name: "Acme".into() }],
-        hosts: vec![HostEntry {
-            id: "x".into(),
-            customer: "acme".into(),
-            token_sha256: sha256_hex(TOKEN),
-        }],
+        hosts: vec![HostEntry { id: "x".into(), customer: None, token_sha256: sha256_hex(TOKEN) }],
         ..ServerConfig::default()
     };
     AppState::new(Store::new(db::open_in_memory().unwrap()), cfg, Timestamp::now())

@@ -1,15 +1,26 @@
 use super::*;
 use skym_core::rules::IncidentCode;
-use skym_core::view::{CustomerOverview, EndpointOverview, HostOverview, Status};
+use skym_core::view::Status;
 use std::collections::BTreeMap;
 
 fn t(min: i64) -> Timestamp {
     Timestamp::from_second(1_790_000_000 + min * 60).unwrap()
 }
 
+/// An open problem; skym watches host `x` since minute 0 and host `y` since minute 60.
 fn incident(subject: &str, severity: Severity, opened: i64) -> IncidentView {
+    let subject: skym_core::subject::Subject = subject.parse().unwrap();
+    let watched = match subject.host().map(String::as_str) {
+        Some("x") => Some(t(0)),
+        Some("y") => Some(t(60)),
+        _ => None,
+    };
     IncidentView {
-        subject: subject.parse().unwrap(),
+        app: match &subject {
+            skym_core::subject::Subject::Workload(k) => Some(AppKey::of(k)),
+            _ => None,
+        },
+        subject,
         code: IncidentCode::WorkloadDown,
         severity,
         detail: "d".into(),
@@ -20,31 +31,19 @@ fn incident(subject: &str, severity: Severity, opened: i64) -> IncidentView {
         muted: false,
         mute_reason: None,
         links: BTreeMap::new(),
+        observed_since: watched,
     }
 }
 
-/// Host `x` watched since minute 0, host `y` since minute 60.
+/// The overview with these problems (the order does not matter).
 fn overview(x: Vec<IncidentView>, y: Vec<IncidentView>) -> Overview {
-    let host = |id: &str, watched: i64, incidents| HostOverview {
-        id: id.into(),
-        status: Status::Critical,
-        last_report_ago: Some("5s".into()),
-        observed_since: Some(t(watched)),
-        info_count: 0,
-        incidents,
-        links: BTreeMap::new(),
-    };
     Overview {
         ts: t(0),
         status: Status::Critical,
-        customers: vec![CustomerOverview {
-            id: "acme".into(),
-            name: "Acme".into(),
-            status: Status::Critical,
-            hosts: vec![host("x", 0, x), host("y", 60, y)],
-            endpoints: vec![],
-        }],
+        customers: vec![],
         muted_count: 0,
+        problems: x.into_iter().chain(y).collect(),
+        hosts: vec![],
     }
 }
 
@@ -64,7 +63,7 @@ fn new_means_after_the_baseline_and_within_a_day() {
         vec![],
     );
     let now = t(300 + 24 * 60); // the stale one is exactly a day old: no longer new
-    let p = problems(&o, &[], None, now);
+    let p = problems(&o, &[], now);
     assert_eq!(subjects(&p.new), ["workload:x/a/fresh"]);
     // found at the first look: at least as old as skym's watch, so it comes first
     assert_eq!(
@@ -84,7 +83,7 @@ fn age_is_exact_when_known_and_a_lower_bound_when_it_predates_skym() {
         vec![stopped, incident("workload:y/a/later", Severity::Warn, 100)],
     );
     let now = t(120);
-    let p = problems(&o, &[], None, now);
+    let p = problems(&o, &[], now);
     let age_of = |s: &str| {
         p.new.iter().chain(&p.ongoing).find(|r| r.incident.subject.to_string() == s).unwrap().age
     };
@@ -94,7 +93,7 @@ fn age_is_exact_when_known_and_a_lower_bound_when_it_predates_skym() {
 }
 
 #[test]
-fn worst_then_longest_first_with_hygiene_apart_and_a_host_filter() {
+fn worst_then_longest_first_with_hygiene_apart() {
     let mut info = incident("host:x", Severity::Info, 1);
     info.code = IncidentCode::LogUnbounded;
     let o = overview(
@@ -105,65 +104,50 @@ fn worst_then_longest_first_with_hygiene_apart_and_a_host_filter() {
         ],
         vec![incident("workload:y/a/long", Severity::Critical, 61)],
     );
-    let p = problems(&o, &[], None, t(240));
+    let p = problems(&o, &[], t(240));
     assert_eq!(subjects(&p.new), ["workload:x/a/short"], "opened after the baseline");
     assert_eq!(subjects(&p.ongoing), ["workload:y/a/long", "workload:x/a/warn"], "critical first");
     assert_eq!(subjects(&p.info), ["host:x"]);
-    let only_x = problems(&o, &[], Some(&Subject::Host("x".into())), t(240));
-    assert!(only_x.ongoing.iter().chain(&only_x.info).all(|r| r.host == "x"));
+    assert_eq!(p.info[0].app(), None, "a host's own problem");
+    assert_eq!(p.new[0].app().map(ToString::to_string), Some("x/a".into()));
+}
+
+#[test]
+fn a_url_runs_where_its_app_does_and_is_dated_from_its_first_probe() {
+    let mut down = incident("endpoint:https://partner.example.com/", Severity::Critical, 100);
+    down.app = Some("external/partner".parse().unwrap());
+    down.observed_since = Some(t(99));
+    let mut ours = incident("endpoint:https://shop.example.com/", Severity::Warn, 2);
+    ours.app = Some("y/shop".parse().unwrap());
+    ours.observed_since = Some(t(0));
+    let o = overview(vec![down, ours], vec![]);
+    let p = problems(&o, &[], t(120));
+    let row = |s: &str| {
+        p.new.iter().chain(&p.ongoing).find(|r| r.incident.subject.to_string().contains(s)).unwrap()
+    };
+    assert_eq!((row("partner").host, row("shop").host), ("external", "y"));
+    assert_eq!(
+        row("partner").age,
+        Age::AtLeast(SignedDuration::from_mins(21)),
+        "found at its first probe"
+    );
+    assert_eq!(
+        subjects(&p.ongoing),
+        ["endpoint:https://partner.example.com/", "endpoint:https://shop.example.com/"]
+    );
 }
 
 #[test]
 fn muted_incidents_join_only_when_given() {
-    let o = overview(vec![], vec![]);
+    let o = overview(vec![incident("workload:x/a/other", Severity::Critical, 1)], vec![]);
     let mut quiet = incident("workload:x/a/legacy", Severity::Critical, 1);
     quiet.muted = true;
-    let unmuted = incident("workload:x/a/other", Severity::Critical, 1);
-    let given = [quiet, unmuted];
-    let mut elsewhere = incident("workload:y/a/legacy", Severity::Critical, 61);
-    elsewhere.muted = true;
-    let given = [given[0].clone(), given[1].clone(), elsewhere];
-    let p = problems(&o, &given, Some(&Subject::Host("x".into())), t(70));
-    assert_eq!(subjects(&p.ongoing), ["workload:x/a/legacy"], "the overview already has unmuted");
-    assert!(problems(&o, &[], None, t(10)).ongoing.is_empty());
-}
-
-#[test]
-fn endpoints_list_with_the_hosts_and_can_be_picked_alone() {
-    let url = "https://shop.example.com/";
-    let mut o = overview(vec![incident("workload:x/a/api", Severity::Critical, 1)], vec![]);
-    let mut down = incident(&format!("endpoint:{url}"), Severity::Critical, 100);
-    down.code = IncidentCode::EndpointDown;
-    o.customers[0].endpoints = vec![EndpointOverview {
-        url: url.into(),
-        status: Status::Critical,
-        last_probe_ago: Some("20s".into()),
-        observed_since: Some(t(0)),
-        http_status: None,
-        latency_ms: None,
-        cert_expires_at: None,
-        incidents: vec![down.clone()],
-        app: None,
-    }];
-    let p = problems(&o, &[], None, t(120));
-    assert_eq!(subjects(&p.new), [format!("endpoint:{url}")], "new by the endpoint's own watch");
+    let given = [quiet, incident("workload:x/a/other", Severity::Critical, 1)];
+    let p = problems(&o, &given, t(70));
     assert_eq!(
-        (p.new[0].host, p.new[0].age),
-        (ENDPOINT, Age::Exact(SignedDuration::from_mins(20)))
+        subjects(&p.ongoing),
+        ["workload:x/a/legacy", "workload:x/a/other"],
+        "the overview already has the unmuted one"
     );
-    assert_eq!(subjects(&p.ongoing), ["workload:x/a/api"]);
-    let only = problems(&o, &[], Some(&Subject::Endpoint(url.into())), t(120));
-    assert_eq!((only.new.len(), only.ongoing.len()), (1, 0), "picking it hides the hosts");
-    let only_x = problems(&o, &[], Some(&Subject::Host("x".into())), t(120));
-    assert!(only_x.new.is_empty(), "and picking a host hides it");
-    let mut quiet = down.clone();
-    quiet.muted = true;
-    o.customers[0].endpoints[0].incidents.clear();
-    let given = [quiet, down];
-    let shown = problems(&o, &given, None, t(120));
-    assert_eq!(
-        subjects(&shown.new),
-        [format!("endpoint:{url}")],
-        "a muted one shows when asked; the unmuted one is the overview's to list"
-    );
+    assert_eq!(problems(&o, &[], t(70)).ongoing.len(), 1);
 }

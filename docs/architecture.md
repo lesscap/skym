@@ -56,7 +56,7 @@ In Rust: no `deny_unknown_fields`, `#[serde(default)]` on non-`Option` fields ad
 - **Credentials stay on the host.** Probes that need credentials (for example, connecting to a database found in a container) read them and run locally; only the result is reported. The one exception is a token for an endpoint probe: it lives in the server's configuration, is sent only to that endpoint's origin, and never appears in the API or logs.
 - **Data minimization.** Container environment variables are never reported. Only whitelisted labels (`com.docker.compose.*`) are reported. Public IP addresses are not reported. Exception messages are truncated and filtered for common secret patterns before leaving the host.
 - **Read-only checks.** `skym` runs as a dedicated user and only reads. It never runs `docker exec` or anything else inside containers. Note that access to the Docker socket is effectively root access; host owners who do not accept that can disable container checks.
-- **Single operator.** skym is run by one team for all the hosts it looks after. Hosts are grouped by customer, but customers have no access to skym. Every reader token sees everything; each person or agent gets its own token so access can be told apart and revoked.
+- **Single operator.** skym is run by one team for all the hosts it looks after; nobody else has access. Every reader token sees everything; each person or agent gets its own token so access can be told apart and revoked.
 
 ## Failure model
 
