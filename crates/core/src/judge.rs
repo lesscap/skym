@@ -112,15 +112,38 @@ fn is_systemd(subject: &Subject) -> bool {
     matches!(subject, Subject::Workload(k) if k.project == "_systemd")
 }
 
-/// Only while running: a stopped container is `WORKLOAD_DOWN`, whatever its last health.
+/// What the runtime answers when a healthcheck's process cannot be started: nothing was
+/// checked, though Docker counts it as a failed check.
+const CHECK_NOT_STARTED: &str = "OCI runtime exec failed: ";
+const RUNC_CONTEXT: &str = "exec failed: unable to start container process: ";
+/// Why it could not start, when the check itself is at fault (a missing binary, a bad path,
+/// a file that cannot be executed). Other reasons (out of pids or memory) are the workload's.
+const CHECK_AT_FAULT: [&str; 3] =
+    ["not found in $path", "no such file or directory", "permission denied"];
+
+/// Only while running: a stopped container is `WORKLOAD_DOWN`, whatever its last health. A
+/// check that could not run says nothing of the workload's health: hygiene, the image's
+/// healthcheck to fix.
 fn unhealthy(subject: &Subject, state: &WorkloadState) -> Option<Finding> {
     if state.run != RunState::Running || state.health != Some(Health::Unhealthy) {
         return None;
     }
-    let failing = state
-        .health_failing_streak
-        .map_or_else(|| "healthcheck failing".to_string(), |n| format!("failing {n} checks"));
-    let detail = match state.health_output.as_deref().filter(|o| !o.is_empty()) {
+    let output = state.health_output.as_deref().filter(|o| !o.is_empty());
+    let checks = state.health_failing_streak.map(|n| format!("{n} checks"));
+    let broken = output
+        .and_then(|o| o.strip_prefix(CHECK_NOT_STARTED))
+        .filter(|why| CHECK_AT_FAULT.iter().any(|f| why.to_lowercase().contains(f)));
+    if let Some(why) = broken {
+        let why = why.strip_prefix(RUNC_CONTEXT).unwrap_or(why);
+        let detail = match checks {
+            Some(n) => format!("the healthcheck cannot run ({n}), so health is unknown: {why}"),
+            None => format!("the healthcheck cannot run, so health is unknown: {why}"),
+        };
+        return Some(finding(subject, IncidentCode::HealthcheckBroken, Severity::Info, detail));
+    }
+    let failing =
+        checks.map_or_else(|| "healthcheck failing".to_string(), |n| format!("failing {n}"));
+    let detail = match output {
         Some(output) => format!("{failing}: {output}"),
         None => failing,
     };

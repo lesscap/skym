@@ -20,7 +20,7 @@ curl -fsS -H "Authorization: Bearer $SKYM_TOKEN" "$SKYM_URL/api/overview"
 3. `HEARTBEAT_LOST` comes first: nothing else about that host is current. When the details say "all hosts silent", suspect the server or its network, not every host.
 4. Follow `links` to drill down (host → workload → timeline, exceptions, incidents); build a URL only from what `GET /api` lists.
 5. `open_for` is how long skym has seen a problem, not how long it has existed: when it is close to the host's `observed_since`, the problem predates skym. An incident's `since`, when present, is when it really began. Lead with problems that are new.
-6. Severity, thresholds and status are already judged: report them, do not re-derive them from raw numbers. `info` incidents are hygiene (e.g. unbounded logs): mention them last, briefly.
+6. Severity, thresholds and status are already judged: report them, do not re-derive them from raw numbers. `info` incidents are hygiene (e.g. unbounded logs): mention them last, briefly. `HEALTHCHECK_BROKEN` means the image's healthcheck cannot run (a missing `wget`, say): the service's health is unknown, so judge it by its URLs and the image's healthcheck is what to fix.
 7. Explain with the timeline: a `deployed` or `config_changed` event just before an incident is the first suspect.
 8. Exceptions: `/api/exceptions?host=…` groups failures by component and code; `business` ones are expected outcomes, not faults.
 
