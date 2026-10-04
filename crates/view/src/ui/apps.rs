@@ -1,7 +1,7 @@
 //! Every application, grouped by environment; and one application with its URLs and services.
 
-use super::preview::{size, usage};
-use super::{Theme, ago, block, draw_preview, empty_row, preview, problem_table, with_preview};
+use super::format::{ago, answer, app_count, reason, size, usage};
+use super::{Theme, block, draw_preview, empty_row, preview, problem_table, with_preview};
 use crate::app::{App, AppRow};
 use crate::apps::{Group, Grouping, Sort, used_memory};
 use crate::names;
@@ -45,7 +45,11 @@ pub fn list(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
         " Applications ({}) · by {}{} ",
         all.apps.len(),
         app.grouping.label(),
-        if app.sort == Sort::Memory { " · most memory first" } else { "" }
+        if app.sort == Sort::default() {
+            String::new()
+        } else {
+            format!(" · {}", app.sort.label())
+        }
     );
     let selected = (!listed.is_empty()).then_some(app.frame().cursor);
     let mut state = TableState::default().with_selected(selected);
@@ -71,7 +75,7 @@ fn group_row(g: &Group, by: Grouping, theme: Theme) -> Row<'static> {
             format!("{mark} {name}"),
             Style::new().add_modifier(Modifier::BOLD),
         )),
-        Cell::from(Line::styled(preview::app_count(g.all.len()), theme.dim())),
+        Cell::from(Line::styled(app_count(g.all.len()), theme.dim())),
         Cell::from(""),
         Cell::from(Line::from(g.memory().map_or(String::new(), size)).right_aligned()),
     ])
@@ -102,7 +106,7 @@ fn app_row(
 ) -> Row<'static> {
     let url = match (a.endpoints.first(), a.incidents.first()) {
         (Some(e), _) => endpoint_text(e, a.endpoints.len()),
-        (None, Some(i)) => super::reason(&i.detail),
+        (None, Some(i)) => reason(&i.detail),
         (None, None) => "—".into(),
     };
     let deployed = a.last_deployed.map_or("—".to_string(), |t| ago(now, t));
@@ -126,10 +130,13 @@ fn app_row(
     .style(if a.status == Status::Ok && a.services == 0 { theme.dim() } else { Style::new() })
 }
 
-/// The columns' names: `second` is HOST or ENV; `MEM ▼` while sorted by memory.
+/// The columns' names: `second` is HOST or ENV; a `▼` on the one the applications are
+/// sorted by.
 fn app_header(second: &'static str, app: &App, theme: Theme) -> Row<'static> {
-    let mem = if app.sort == Sort::Memory { "MEM ▼" } else { "MEM" };
-    Row::new(["", "APP", second, "SVC", mem, "UP", "URL", "ERR 1H", "DEPLOYED"]).style(theme.dim())
+    let names = ["", "APP", second, "SVC", "MEM", "UP", "URL", "ERR 1H", "DEPLOYED"];
+    let sorted = app.sort.column();
+    let names = names.map(|n| if Some(n) == sorted { format!("{n} ▼") } else { n.to_string() });
+    Row::new(names).style(theme.dim())
 }
 
 /// `2.3G 14%` of its host's memory, `2.3G` without the host's total, `—` without any.
@@ -143,8 +150,7 @@ fn mem_cell(a: &AppSummary, host_memory: Option<u64>) -> String {
 
 /// The total memory of the host an application runs on, as the overview has it.
 fn host_memory(app: &App, a: &AppSummary) -> Option<u64> {
-    let hosts = app.overview.value.iter().flat_map(|o| &o.hosts);
-    hosts.filter(|h| h.id == a.key.host).find_map(|h| h.memory_total_bytes)
+    app.host_summary(&a.key.host)?.memory_total_bytes
 }
 
 /// How long its longest-running workload has been running.
@@ -167,7 +173,7 @@ pub(super) fn host_apps(f: &mut Frame, area: Rect, app: &App, now: Timestamp, th
         rows.push(empty_row(1, "(none)".into(), theme));
     }
     let widths = APP_COLUMNS;
-    let order = if app.sort == Sort::Memory { "most memory first" } else { "problems first" };
+    let order = app.sort.label();
     let title = format!(" Apps ({}) · {order} ", apps.len());
     let mut state = TableState::default().with_selected(Some(app.frame().cursor));
     let table = Table::new(rows, widths)
@@ -179,13 +185,9 @@ pub(super) fn host_apps(f: &mut Frame, area: Rect, app: &App, now: Timestamp, th
 
 /// `shop.example.com  84ms`, and how many more URLs there are.
 fn endpoint_text(e: &EndpointOverview, count: usize) -> String {
-    let answer = match (e.http_status, e.latency_ms) {
-        (Some(_), Some(ms)) => format!("{ms}ms"),
-        _ if e.last_probe_ago.is_none() => "not probed yet".into(),
-        _ => "no answer".into(),
-    };
     let more = if count > 1 { format!("  +{}", count - 1) } else { String::new() };
-    format!("{}  {answer}{more}", names::short(&Subject::Endpoint(e.url.clone())))
+    let url = names::short(&Subject::Endpoint(e.url.clone()));
+    format!("{url}  {}{more}", answer(e, false))
 }
 
 pub fn one(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {

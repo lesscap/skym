@@ -1,7 +1,7 @@
 use super::*;
+use skym_core::fixtures;
 use skym_core::rules::IncidentCode;
 use skym_core::view::Status;
-use std::collections::BTreeMap;
 
 fn t(min: i64) -> Timestamp {
     Timestamp::from_second(1_790_000_000 + min * 60).unwrap()
@@ -15,24 +15,16 @@ fn incident(subject: &str, severity: Severity, opened: i64) -> IncidentView {
         Some("y") => Some(t(60)),
         _ => None,
     };
+    let i = fixtures::incident(&subject.to_string(), IncidentCode::WorkloadDown, severity);
     IncidentView {
         app: match &subject {
             skym_core::subject::Subject::Workload(k) => Some(AppKey::of(k)),
             _ => None,
         },
-        subject,
-        code: IncidentCode::WorkloadDown,
-        severity,
         detail: "d".into(),
         opened_at: Some(t(opened)),
-        since: None,
-        open_for: None,
-        resolved_at: None,
-        muted: false,
-        mute_reason: None,
-        links: BTreeMap::new(),
         observed_since: watched,
-        workload: None,
+        ..i
     }
 }
 

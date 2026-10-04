@@ -2,7 +2,6 @@
 
 use super::{App, AppRow, Data, Frame, Key, Screen, TABS, WINDOWS};
 use crate::api::Request;
-use crate::apps::Sort;
 use jiff::Timestamp;
 use skym_core::subject::{AppKey, Subject};
 
@@ -76,13 +75,10 @@ impl App {
         }
     }
 
-    /// Sorts the other way, the selection staying on its application (a header stays put).
-    fn toggle_sort(&mut self) {
+    /// Sorts by the next order, the selection staying on its application (a header stays put).
+    fn next_sort(&mut self) {
         let selected = self.app_keys().get(self.frame().cursor).cloned().flatten();
-        self.sort = match self.sort {
-            Sort::Problems => Sort::Memory,
-            Sort::Memory => Sort::Problems,
-        };
+        self.sort = self.sort.next();
         let at = selected.and_then(|k| self.app_keys().iter().position(|r| r.as_ref() == Some(&k)));
         if let Some(at) = at {
             self.frame_mut().cursor = at;
@@ -208,7 +204,7 @@ impl App {
             Key::Char('h') => self.show_info = !self.show_info,
             Key::Char('p') => self.preview = !self.preview,
             Key::Char('s') if matches!(self.frame().screen, Screen::Apps | Screen::Host(_)) => {
-                self.toggle_sort();
+                self.next_sort();
             }
             Key::Char('m') => {
                 self.show_muted = !self.show_muted;

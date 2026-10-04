@@ -1,14 +1,14 @@
 //! Applications: workloads grouped by application, described by the configuration. Pure.
 
-use super::views::{links, status};
+use super::views::{self, links, status};
 use crate::config::{AppConfig, HostEntry};
 use crate::store::hosts::WorkloadRow;
 use jiff::Timestamp;
 use skym_core::model::{Event, EventKind, RunState};
 use skym_core::rules::IncidentCode;
-use skym_core::subject::{AppKey, Subject, WorkloadKey, encode};
+use skym_core::subject::{AppKey, Subject, WorkloadKey};
 use skym_core::view::{
-    AppSummary, Deploy, EndpointOverview, IncidentView, Status, WorkloadSummary, workload_summary,
+    AppSummary, Deploy, EndpointOverview, IncidentView, Status, WorkloadSummary,
 };
 use std::collections::BTreeMap;
 
@@ -107,23 +107,15 @@ fn summary(
         tags,
         endpoints,
         incidents,
-        links: BTreeMap::from([
-            ("app".to_string(), key.path()),
-            ("host".to_string(), format!("/api/hosts/{}", encode(&key.host))),
-        ]),
+        links: links(&Subject::App(key.clone())),
         key,
     }
 }
 
 /// Its workloads with their own status, those with problems first.
 fn workload_summaries(rows: &[&WorkloadRow], incidents: &[IncidentView]) -> Vec<WorkloadSummary> {
-    let mut list: Vec<WorkloadSummary> = rows
-        .iter()
-        .map(|w| {
-            let links = links(&Subject::Workload(w.key.clone()));
-            workload_summary(w.key.clone(), w.facts.as_ref(), &w.state, incidents, links)
-        })
-        .collect();
+    let mut list: Vec<WorkloadSummary> =
+        rows.iter().map(|w| views::summary(w, incidents)).collect();
     list.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.key.cmp(&b.key)));
     list
 }

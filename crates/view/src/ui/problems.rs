@@ -1,6 +1,7 @@
 //! The problems tab: every open problem, new ones first, each named by its application.
 
-use super::{Theme, age, block, draw_preview, empty_row, preview, reason, with_preview};
+use super::format::{age, reason};
+use super::{Theme, block, draw_preview, empty_row, preview, with_preview};
 use crate::app::App;
 use crate::names;
 use crate::problems::Row;

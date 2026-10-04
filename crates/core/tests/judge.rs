@@ -405,22 +405,9 @@ fn a_healthcheck_that_cannot_run_is_hygiene_not_unhealthy() {
 }
 
 fn incident(subject: Subject, severity: Severity, muted: bool) -> IncidentView {
-    IncidentView {
-        subject,
-        code: IncidentCode::DiskFilling,
-        severity,
-        detail: String::new(),
-        opened_at: None,
-        since: None,
-        open_for: None,
-        resolved_at: None,
-        muted,
-        mute_reason: None,
-        links: BTreeMap::new(),
-        app: None,
-        observed_since: None,
-        workload: None,
-    }
+    let i =
+        skym_core::fixtures::incident(&subject.to_string(), IncidentCode::DiskFilling, severity);
+    IncidentView { muted, ..i }
 }
 
 #[test]

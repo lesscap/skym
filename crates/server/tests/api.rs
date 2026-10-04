@@ -1,13 +1,15 @@
 //! The HTTP API end to end, against an in-memory database.
 
+mod common;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use common::{app_config, down};
 use flate2::{Compression, write::GzEncoder};
 use http_body_util::BodyExt;
 use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
-use skym_core::model::RunState;
 use skym_core::report::Report;
 use skym_server::api::{AppState, router};
 use skym_server::config::{
@@ -256,13 +258,6 @@ async fn a_silent_host_loses_its_heartbeat_and_a_report_restores_it() {
     assert_eq!(resolved["incidents"][0]["code"], "HEARTBEAT_LOST");
 }
 
-/// Workload `i` of the report exited with an error.
-fn down(mut r: Report, i: usize) -> Report {
-    r.workloads[i].state.run = RunState::Exited;
-    r.workloads[i].state.exit_code = Some(1);
-    r
-}
-
 #[tokio::test]
 async fn views_scope_incidents_and_ignore_muted_ones() {
     let mute = Mute {
@@ -441,9 +436,7 @@ async fn reports_from_a_clock_slightly_ahead_are_visible_at_once() {
 #[tokio::test]
 async fn applications_are_listed_described_and_missed() {
     let shop = AppConfig {
-        id: "x/shop".parse().unwrap(),
         name: Some("Shop".into()),
-        env: Some("prod".into()),
         note: Some("the web shop".into()),
         tags: vec!["billing".into()],
         probes: vec![AppProbe {
@@ -451,6 +444,7 @@ async fn applications_are_listed_described_and_missed() {
             expect: vec![],
             headers: Headers([("Authorization".to_string(), "Bearer s3cret".to_string())].into()),
         }],
+        ..app_config("x/shop", Some("prod"))
     };
     let (app, state) = app_configured(vec![], vec![shop]);
     let listed = |mins_ago| Report { containers_listed: true, ..report(mins_ago) };

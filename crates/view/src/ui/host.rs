@@ -1,7 +1,8 @@
 //! One host: what it is, how it is doing, its problems and its services.
 
 use super::apps::host_apps;
-use super::{Theme, hygiene_folded, local, preview, problem_table, shown};
+use super::format::local;
+use super::{Theme, hygiene_folded, preview, problem_table, shown};
 use crate::app::App;
 use crate::names::short;
 use jiff::Timestamp;
@@ -66,7 +67,7 @@ fn header(app: &App, h: &HostView, now: Timestamp, theme: Theme) -> Vec<Line<'st
         theme.status(h.status),
         Span::raw(format!(" {:?}   {reported}{watched}{ip}", h.status).to_lowercase()),
     ])];
-    let summary = app.overview.value.iter().flat_map(|o| &o.hosts).find(|s| s.id == h.id);
+    let summary = app.host_summary(&h.id);
     if let Some(s) = summary {
         lines.extend(preview::host_body(app, s, now, theme));
     }

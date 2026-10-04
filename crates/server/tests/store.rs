@@ -1,8 +1,11 @@
 //! Ingest, heartbeat and maintenance at chosen times, against an in-memory database.
 
+mod common;
+
+use common::{app_config as app, down};
 use jiff::{SignedDuration, Timestamp};
 use rusqlite::Connection;
-use skym_core::model::{ExceptionClass, ExceptionGroup, LocalEvent, RunState};
+use skym_core::model::{ExceptionClass, ExceptionGroup, LocalEvent};
 use skym_core::report::Report;
 use skym_core::rules::IncidentCode;
 use skym_server::config::AppConfig;
@@ -150,12 +153,6 @@ fn disk_growth_is_projected_from_reported_usage() {
         .find(|i| i.code == IncidentCode::DiskFilling);
     let disk = disk.expect("10 MB/s fills the rest within a day");
     assert!(disk.detail.contains("full in"), "{}", disk.detail);
-}
-
-fn down(mut r: Report, i: usize) -> Report {
-    r.workloads[i].state.run = RunState::Exited;
-    r.workloads[i].state.exit_code = Some(1);
-    r
 }
 
 #[test]
@@ -331,17 +328,6 @@ fn a_failed_source_does_not_clear_unbounded_logs() {
     assert!(open_codes(&c).contains(&host_logs), "unknown, not recovered");
     send(&mut c, &report(t0() + mins(2)), t0() + mins(2)).unwrap();
     assert!(!open_codes(&c).contains(&host_logs), "every container bounded again");
-}
-
-fn app(id: &str, env: Option<&str>) -> AppConfig {
-    AppConfig {
-        id: id.parse().unwrap(),
-        name: None,
-        env: env.map(String::from),
-        note: None,
-        tags: vec![],
-        probes: vec![],
-    }
 }
 
 fn missing(c: &Connection) -> Vec<(String, State, skym_core::rules::Severity)> {

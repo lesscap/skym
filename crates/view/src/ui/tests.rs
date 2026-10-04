@@ -4,12 +4,13 @@ use crate::app::{Frame, Msg, Screen, update};
 use crate::apps::{Grouping, Sort};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use skym_core::fixtures;
 use skym_core::rules::IncidentCode;
 use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{
     AppList, AppSummary, DiskUse, EndpointOverview, HostOverview, HostView, IncidentView, Overview,
+    WorkloadSummary,
 };
-use std::collections::BTreeMap;
 
 fn t(min: i64) -> Timestamp {
     Timestamp::from_second(1_790_000_000 + min * 60).unwrap()
@@ -17,58 +18,31 @@ fn t(min: i64) -> Timestamp {
 
 /// An open problem on a host skym watches since minute 0, attributed as the server does.
 fn incident(subject: &str, code: IncidentCode, severity: Severity, opened: i64) -> IncidentView {
-    let subject: Subject = subject.parse().unwrap();
+    let i = fixtures::incident(subject, code, severity);
     IncidentView {
-        app: match &subject {
+        app: match &i.subject {
             Subject::Workload(k) => Some(AppKey::of(k)),
             Subject::Endpoint(_) => Some("external/partner".parse().unwrap()),
             _ => None,
         },
-        subject,
-        code,
-        severity,
         detail: format!("{} detail", code.as_str()),
         opened_at: Some(t(opened)),
-        since: None,
-        open_for: None,
-        resolved_at: None,
-        muted: false,
-        mute_reason: None,
-        links: BTreeMap::new(),
         observed_since: Some(t(0)),
-        workload: None,
+        ..i
     }
 }
 
 fn host(id: &str, status: Status, disks: Vec<DiskUse>) -> HostOverview {
     HostOverview {
-        id: id.into(),
         status,
-        last_report_ago: Some("5s".into()),
         observed_since: Some(t(0)),
-        info_count: 0,
-        incidents: vec![],
-        links: BTreeMap::new(),
         load_1m: Some(1.3),
         memory_used_bytes: Some(9_800_000_000),
         memory_total_bytes: Some(31_000_000_000),
         disks,
         apps: 23,
         apps_in_trouble: 3,
-        os: None,
-        kernel: None,
-        arch: None,
-        cpu_count: None,
-        boot_time: None,
-        docker_version: None,
-        agent_version: None,
-        ip: None,
-        cpu_percent: None,
-        iowait_percent: None,
-        steal_percent: None,
-        net_rx_bytes_per_s: None,
-        net_tx_bytes_per_s: None,
-        tags: vec![],
+        ..fixtures::host_overview(id)
     }
 }
 
@@ -234,22 +208,11 @@ fn the_hosts_tab_shows_load_disks_and_apps() {
         t(120),
     );
     let warn = |key: &str| AppSummary {
-        key: key.parse().unwrap(),
         name: key.into(),
-        env: None,
-        note: None,
-        configured: false,
         status: Status::Warn,
         services: 1,
         running: 1,
-        last_deployed: None,
-        endpoints: vec![],
-        incidents: vec![],
-        links: BTreeMap::new(),
-        workloads: vec![],
-        deploys: vec![],
-        exceptions_1h: 0,
-        tags: vec![],
+        ..fixtures::app(key)
     };
     let apps = AppList { apps: vec![warn("x/a"), warn("x/b")] };
     update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(apps)))), t(120));
@@ -277,22 +240,12 @@ fn a_host_shows_its_own_problems_and_its_apps() {
         incident("workload:x/app/fresh", IncidentCode::WorkloadDown, Severity::Critical, 100),
     ];
     let app_summary = |key: &str, env: &str, status| AppSummary {
-        key: key.parse().unwrap(),
-        name: key.rsplit('/').next().unwrap().into(),
         env: Some(env.into()),
-        note: None,
         configured: true,
         status,
         services: 2,
         running: 2,
-        last_deployed: None,
-        endpoints: vec![],
-        incidents: vec![],
-        links: BTreeMap::new(),
-        workloads: vec![],
-        deploys: vec![],
-        exceptions_1h: 0,
-        tags: vec![],
+        ..fixtures::app(key)
     };
     view.apps = vec![
         app_summary("x/app", "prod", Status::Critical),
@@ -404,22 +357,14 @@ fn a_service_hides_its_muted_problems_unless_asked() {
 #[test]
 fn the_applications_page_groups_by_environment() {
     let app_summary = |key: &str, env: Option<&str>, status: Status, endpoints| AppSummary {
-        key: key.parse().unwrap(),
-        name: key.rsplit('/').next().unwrap().into(),
         env: env.map(String::from),
-        note: None,
         configured: env.is_some(),
         status,
         services: 2,
         running: 1,
         last_deployed: Some(t(60)),
         endpoints,
-        incidents: vec![],
-        links: BTreeMap::new(),
-        workloads: vec![],
-        deploys: vec![],
-        exceptions_1h: 0,
-        tags: vec![],
+        ..fixtures::app(key)
     };
     let list = AppList {
         apps: vec![
@@ -478,27 +423,17 @@ fn previewed(width: u16, height: u16) -> Vec<String> {
     fresh.detail =
         "exited (1), for 20m, no restart policy, and a reason long enough to be cut in the list"
             .into();
-    fresh.workload = Some(Box::new(skym_core::view::WorkloadSummary {
-        key: "workload:x/app/fresh"
-            .parse::<Subject>()
-            .map(|s| match s {
-                Subject::Workload(k) => k,
-                _ => unreachable!(),
-            })
-            .unwrap(),
-        kind: None,
+    fresh.workload = Some(Box::new(WorkloadSummary {
         status: Status::Critical,
         run: skym_core::model::RunState::Exited,
         exit_code: Some(1),
-        state_since: None,
         image: Some("registry.example.com/fresh:1.4".into()),
-        links: BTreeMap::new(),
         restart_policy: Some("unless-stopped".into()),
         ports: vec!["0.0.0.0:8080->80/tcp".into()],
         memory_used_bytes: Some(120_000_000),
         memory_limit_bytes: Some(512_000_000),
         restarts_last_hour: 2,
-        health_output: None,
+        ..fixtures::workload("x/app/fresh")
     }));
     o.hosts[0].os = Some("Ubuntu 22.04".into());
     o.hosts[0].ip = Some("203.0.113.7".into());
@@ -540,18 +475,13 @@ fn on_a_wide_terminal_the_preview_sits_beside_the_list() {
 }
 
 /// A workload on x using this much memory.
-fn using(bytes: u64) -> skym_core::view::WorkloadSummary {
-    serde_json::from_value(serde_json::json!({
-        "key": { "host": "x", "project": "p", "service": "s" },
-        "status": "ok", "run": "running", "memory_used_bytes": bytes
-    }))
-    .unwrap()
+fn using(bytes: u64) -> WorkloadSummary {
+    WorkloadSummary { memory_used_bytes: Some(bytes), ..fixtures::workload("x/p/s") }
 }
 
 #[test]
 fn the_apps_and_hosts_tabs_preview_their_selection() {
     let mut a = AppSummary {
-        key: "x/shop".parse().unwrap(),
         name: "Shop".into(),
         env: Some("prod".into()),
         note: Some("the web shop".into()),
@@ -559,11 +489,7 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
         status: Status::Warn,
         services: 1,
         running: 1,
-        last_deployed: None,
         endpoints: vec![endpoint("https://shop.example.com/", Some(84), vec![])],
-        incidents: vec![],
-        links: BTreeMap::new(),
-        workloads: vec![],
         deploys: vec![skym_core::view::Deploy {
             ts: t(60),
             service: "web".into(),
@@ -572,6 +498,7 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
         }],
         exceptions_1h: 7,
         tags: vec!["acme".into(), "eu".into()],
+        ..fixtures::app("x/shop")
     };
     a.endpoints[0].cert_expires_at = Some(t(60 * 24 * 30));
     a.workloads = vec![using(3_000_000_000), using(100_000_000)];

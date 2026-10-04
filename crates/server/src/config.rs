@@ -51,7 +51,7 @@ pub struct Customer {
     pub name: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 pub struct HostEntry {
     pub id: HostId,
     #[serde(default)]
@@ -127,6 +127,19 @@ pub struct AppProbe {
     pub expect: Vec<u16>,
     #[serde(default)]
     pub headers: Headers,
+}
+
+/// A listed application with nothing but its id and environment, for tests.
+#[cfg(test)]
+pub(crate) fn app_config(id: &str, env: Option<&str>) -> AppConfig {
+    AppConfig {
+        id: id.parse().unwrap(),
+        name: None,
+        env: env.map(String::from),
+        note: None,
+        tags: vec![],
+        probes: vec![],
+    }
 }
 
 impl ServerConfig {

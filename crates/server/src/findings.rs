@@ -347,16 +347,7 @@ mod tests {
         assert_eq!(both.len(), 2, "down and expiring are separate incidents");
     }
 
-    fn app(id: &str, env: Option<&str>) -> AppConfig {
-        AppConfig {
-            id: id.parse().unwrap(),
-            name: None,
-            env: env.map(String::from),
-            note: None,
-            tags: vec![],
-            probes: vec![],
-        }
-    }
+    use crate::config::app_config as app;
 
     #[test]
     fn container_apps_go_missing_only_from_a_complete_listing() {

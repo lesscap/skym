@@ -16,31 +16,17 @@ fn row(subject: &str, run: RunState) -> WorkloadRow {
 
 fn incident(subject: &str, code: IncidentCode, severity: Severity) -> IncidentView {
     IncidentView {
-        subject: subject.parse().unwrap(),
-        code,
-        severity,
         detail: "d".into(),
         opened_at: Some(at(0)),
-        since: None,
-        open_for: None,
-        resolved_at: None,
-        muted: false,
-        mute_reason: None,
-        links: BTreeMap::new(),
-        app: None,
-        observed_since: None,
-        workload: None,
+        ..skym_core::fixtures::incident(subject, code, severity)
     }
 }
 
 fn configured(id: &str, name: Option<&str>) -> AppConfig {
     AppConfig {
-        id: id.parse().unwrap(),
         name: name.map(String::from),
-        env: Some("prod".into()),
         note: Some("the shop".into()),
-        tags: vec![],
-        probes: vec![],
+        ..crate::config::app_config(id, Some("prod"))
     }
 }
 
@@ -225,9 +211,8 @@ fn an_app_lists_its_workloads_deploys_and_recent_exceptions() {
 fn apps_carry_their_hosts_tags_and_their_own() {
     let host = |id: &str, tags: &[&str]| HostEntry {
         id: id.into(),
-        customer: None,
-        token_sha256: String::new(),
         tags: tags.iter().map(|t| t.to_string()).collect(),
+        ..HostEntry::default()
     };
     let hosts = [host("x", &["acme", "cn"]), host("y", &["other"])];
     let rows = [

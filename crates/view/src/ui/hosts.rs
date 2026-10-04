@@ -1,7 +1,7 @@
 //! The hosts tab: every host, how loaded it is, and how its applications are doing.
 
-use super::preview::{self, memory, size};
-use super::{Theme, ago, block, draw_preview, empty_row, with_preview};
+use super::format::{ago, cpu_cell, memory, size};
+use super::{Theme, block, draw_preview, empty_row, preview, with_preview};
 use crate::app::App;
 use jiff::Timestamp;
 use ratatui::Frame;
@@ -24,8 +24,8 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
         draw_preview(f, at, title, lines, theme);
     }
     let worst = |host: &str| {
-        let apps = app.apps.value.iter().flat_map(|l| &l.apps);
-        apps.filter(|a| a.key.host == host && a.status != Status::Ok).map(|a| a.status).max()
+        let apps = app.apps_iter().filter(|a| a.key.host == host && a.status != Status::Ok);
+        apps.map(|a| a.status).max()
     };
     let mut rows: Vec<Row> = hosts.iter().map(|h| host_row(h, worst(&h.id), now, theme)).collect();
     if rows.is_empty() {
@@ -68,7 +68,7 @@ fn host_row(h: &HostOverview, worst: Option<Status>, now: Timestamp, theme: Them
         Cell::from(h.ip.clone().unwrap_or_default()),
         right(h.last_report_ago.clone().unwrap_or("never".into())),
         right(h.boot_time.map_or(String::new(), |t| ago(now, t))),
-        right(cpu(h)),
+        right(cpu_cell(h)),
         right(h.load_1m.map_or(String::new(), |l| format!("{l:.2}"))),
         Cell::from(
             h.memory_used_bytes
@@ -77,13 +77,6 @@ fn host_row(h: &HostOverview, worst: Option<Status>, now: Timestamp, theme: Them
         Cell::from(Line::from(disks(&h.disks, theme))),
         Cell::from(Line::from([vec![Span::raw(h.apps.to_string())], trouble].concat())),
     ])
-}
-
-/// `4 · 23%`: CPUs and how busy they were since the previous report.
-fn cpu(h: &HostOverview) -> String {
-    let busy = h.cpu_percent.map(|p| format!("{p:.0}%"));
-    let parts: Vec<String> = h.cpu_count.map(|n| n.to_string()).into_iter().chain(busy).collect();
-    parts.join(" · ")
 }
 
 /// `/ 61% of 40G  /data 44% of 80G ▲`: yellow from 85%, `▲` while one fills up.

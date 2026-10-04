@@ -2,7 +2,7 @@
 //! problems the same way.
 
 use super::apps::History;
-use super::views::{self, Context, incident_view, links};
+use super::views::{self, Context, incident_view};
 use super::{ApiError, AppState, apps};
 use crate::lifecycle::Incident;
 use crate::store::hosts::{HostRow, WorkloadRow};
@@ -10,9 +10,7 @@ use crate::store::probes::ProbeRow;
 use crate::store::{history, hosts, incidents, probes};
 use jiff::{SignedDuration, Timestamp};
 use skym_core::subject::{HostId, Subject, WorkloadKey};
-use skym_core::view::{
-    AppSummary, EndpointOverview, IncidentView, WorkloadSummary, workload_summary,
-};
+use skym_core::view::{AppSummary, EndpointOverview, IncidentView, WorkloadSummary};
 use std::collections::BTreeMap;
 
 /// Generous bound on rows read for one response; lists are cut to `limit` afterwards.
@@ -81,14 +79,8 @@ impl Snapshot {
         };
         let open: Vec<IncidentView> = self.open.iter().map(|i| incident_view(i, &cx)).collect();
         // Each workload once, its status from every open incident (whatever was asked for).
-        let workloads: BTreeMap<&WorkloadKey, WorkloadSummary> = self
-            .workloads
-            .iter()
-            .map(|w| {
-                let links = links(&Subject::Workload(w.key.clone()));
-                (&w.key, workload_summary(w.key.clone(), w.facts.as_ref(), &w.state, &open, links))
-            })
-            .collect();
+        let workloads: BTreeMap<&WorkloadKey, WorkloadSummary> =
+            self.workloads.iter().map(|w| (&w.key, views::summary(w, &open))).collect();
         // A workload's problem carries the workload, for a reader that looks no further.
         incidents
             .iter()

@@ -1,7 +1,8 @@
 //! One service: its problems, state and facts side by side, exceptions, recent events.
 //! Also a host's exceptions, which read the same way.
 
-use super::{Theme, ago, block, empty_row, event, problem_table, reason};
+use super::format::{ago, event, local, reason};
+use super::{Theme, block, empty_row, problem_table};
 use crate::app::App;
 use crate::names::short;
 use jiff::Timestamp;
@@ -196,7 +197,7 @@ fn fact_lines(facts: Option<&WorkloadFacts>) -> Vec<Line<'static>> {
         )),
         Line::from(format!(
             " created   {}",
-            f.created.map_or("—".into(), |t| super::local(t, "%Y-%m-%d %H:%M"))
+            f.created.map_or("—".into(), |t| local(t, "%Y-%m-%d %H:%M"))
         )),
     ]
 }

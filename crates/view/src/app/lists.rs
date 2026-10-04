@@ -1,14 +1,13 @@
 //! What the screens list, derived from the data: problems, applications, hosts, services.
 
 use super::{App, Screen};
-use crate::apps::{Group, Sort, groups, used_memory};
+use crate::apps::{Group, groups};
 use crate::filter::Filter;
 use crate::names;
 use crate::problems::{Problems, Row, problems};
 use jiff::Timestamp;
 use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{AppSummary, HostOverview, Status, WorkloadSummary};
-use std::cmp::Reverse;
 
 /// A row of the applications tab.
 #[derive(Debug)]
@@ -33,7 +32,7 @@ impl App {
                 let what = names::what(&i.subject);
                 let text = format!("{} {} {what} {}", self.app_name(r), r.host, i.detail);
                 let app = r.app().and_then(|key| self.app_summary(key));
-                let host = overview.hosts.iter().find(|h| h.id == r.host);
+                let host = self.host_summary(r.host);
                 let of_app = r.app().is_some();
                 filter.problem(r.host, of_app, app, host.map_or(&[], |h| &h.tags), text)
             });
@@ -59,8 +58,18 @@ impl App {
         }
     }
 
-    fn app_summary(&self, key: &AppKey) -> Option<&AppSummary> {
-        self.apps.value.iter().flat_map(|l| &l.apps).find(|a| a.key == *key)
+    /// Every application read, as the server listed them.
+    pub fn apps_iter(&self) -> impl Iterator<Item = &AppSummary> {
+        self.apps.value.iter().flat_map(|l| &l.apps)
+    }
+
+    pub fn app_summary(&self, key: &AppKey) -> Option<&AppSummary> {
+        self.apps_iter().find(|a| a.key == *key)
+    }
+
+    /// A host as the overview has it.
+    pub fn host_summary(&self, id: &str) -> Option<&HostOverview> {
+        self.overview.value.iter().flat_map(|o| &o.hosts).find(|h| h.id == id)
     }
 
     /// The hosts tab: most urgent first, filtered.
@@ -84,16 +93,13 @@ impl App {
             .collect()
     }
 
-    /// A host's applications, filtered: as the server lists them (problems first), or by
-    /// the memory they use.
+    /// A host's applications, filtered, in the chosen order; ties keep the server's (problems
+    /// first), so sorting by problems leaves its order as it is.
     pub fn host_apps(&self) -> Vec<&AppSummary> {
         let filter = self.filter();
         let apps = self.host.value.iter().flat_map(|h| &h.apps);
         let mut list: Vec<&AppSummary> = apps.filter(|a| filter.app(a)).collect();
-        if self.sort == Sort::Memory {
-            // Most first, those reporting none last.
-            list.sort_by_cached_key(|a| Reverse(used_memory(a)));
-        }
+        list.sort_by(|a, b| self.sort.order(a, b));
         list
     }
 
