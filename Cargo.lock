@@ -2772,6 +2772,7 @@ dependencies = [
  "serde_json",
  "skym-core",
  "tokio",
+ "unicode-width",
 ]
 
 [[package]]

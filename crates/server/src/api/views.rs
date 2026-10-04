@@ -67,6 +67,7 @@ pub fn incident_view(i: &Incident, cx: &Context) -> IncidentView {
             s => s.host().and_then(|h| cx.hosts_seen.get(h)).copied(),
         },
         app,
+        workload: None, // attached where the workloads are known
     }
 }
 
@@ -145,6 +146,7 @@ pub fn host(
         observed_since: row.as_ref().map(|r| r.first_seen),
         facts: row.as_ref().and_then(|r| r.facts.clone()),
         errors: row.as_ref().map(|r| r.errors.clone()).unwrap_or_default(),
+        ip: row.as_ref().and_then(|r| r.remote_addr.clone()),
         state: row.map(|r| r.state),
         id,
         customer: None, // customers are gone; the field stays for older readers
@@ -190,14 +192,23 @@ pub fn host_overview(
                 && matches!(&i.subject, Subject::Mount { path: p, .. } if p == path)
         })
     };
+    let facts = row.and_then(|r| r.facts.as_ref());
+    let fs_type = |path: &str| {
+        facts.and_then(|f| f.mounts.iter().find(|m| m.path == path)).map(|m| m.fs_type.clone())
+    };
+    let percent = |part: u64, whole: u64| (part * 100).checked_div(whole).unwrap_or(0) as u8;
     let disks = row.map_or_else(Vec::new, |r| {
         r.state
             .mounts
             .iter()
             .map(|m| DiskUse {
                 path: m.path.clone(),
-                used_percent: (m.used_bytes * 100).checked_div(m.total_bytes).unwrap_or(0) as u8,
+                used_percent: percent(m.used_bytes, m.total_bytes),
                 filling: filling(&m.path),
+                total_bytes: m.total_bytes,
+                free_bytes: m.total_bytes.saturating_sub(m.used_bytes),
+                inodes_percent: percent(m.inodes_used, m.inodes_total),
+                fs_type: fs_type(&m.path),
             })
             .collect()
     });
@@ -211,11 +222,19 @@ pub fn host_overview(
         links: links(&Subject::Host(id.clone())),
         load_1m: row.map(|r| r.state.load_1m),
         memory_used_bytes: row.map(|r| r.state.memory_used_bytes),
-        memory_total_bytes: row.and_then(|r| r.facts.as_ref()).map(|f| f.memory_total_bytes),
+        memory_total_bytes: facts.map(|f| f.memory_total_bytes),
         disks,
         apps: own.len() as u32,
         apps_in_trouble: own.iter().filter(|a| a.status != Status::Ok).count() as u32,
         incidents: mine,
+        os: facts.map(|f| f.os.clone()),
+        kernel: facts.map(|f| f.kernel.clone()),
+        arch: facts.map(|f| f.arch.clone()),
+        cpu_count: facts.map(|f| f.cpu_count),
+        boot_time: facts.map(|f| f.boot_time),
+        docker_version: facts.and_then(|f| f.docker_version.clone()),
+        agent_version: facts.map(|f| f.agent_version.clone()),
+        ip: row.and_then(|r| r.remote_addr.clone()),
     }
 }
 

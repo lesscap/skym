@@ -115,6 +115,13 @@ CREATE TABLE probes (
   CHECK ((status IS NULL) <> (error IS NULL))
 );
 "#,
+    // The address each host last reported from, as the server saw it; and indexes for
+    // reading every host's recent deployments and exceptions at once.
+    r#"
+ALTER TABLE hosts ADD COLUMN remote_addr TEXT;
+CREATE INDEX exception_groups_ts ON exception_groups (report_ts);
+CREATE INDEX events_kind_ts ON events (kind, ts);
+"#,
 ];
 
 pub fn open(path: &Path) -> anyhow::Result<Connection> {

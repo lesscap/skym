@@ -56,6 +56,37 @@ pub fn last_deployed(c: &Connection) -> rusqlite::Result<BTreeMap<WorkloadKey, T
         .collect())
 }
 
+/// Deployments since `since`, newest first.
+pub fn deploys(c: &Connection, since: Timestamp) -> rusqlite::Result<Vec<Event>> {
+    let mut stmt = c.prepare(
+        "SELECT ts, subject, kind_json FROM events WHERE kind = 'deployed' AND ts >= ?1 ORDER BY ts DESC",
+    )?;
+    let rows = stmt.query_map([ts(since)], |r| {
+        Ok(Event {
+            ts: parsed(r.get(0)?)?,
+            subject: parsed(r.get(1)?)?,
+            kind: from_json(&r.get::<_, String>(2)?)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Application-class exceptions per workload since `since` (every report counts its own).
+pub fn application_exceptions(
+    c: &Connection,
+    since: Timestamp,
+) -> rusqlite::Result<BTreeMap<WorkloadKey, u32>> {
+    let mut stmt = c.prepare(
+        "SELECT host, project, service, SUM(count) FROM exception_groups
+         WHERE class = 'application' AND report_ts >= ?1 GROUP BY host, project, service",
+    )?;
+    let rows = stmt.query_map([ts(since)], |r| {
+        let key = WorkloadKey { host: r.get(0)?, project: r.get(1)?, service: r.get(2)? };
+        Ok((key, r.get::<_, i64>(3)? as u32))
+    })?;
+    rows.collect()
+}
+
 /// OOM kills in `[from, to]`, as the judge expects them.
 pub fn oom_kills(
     c: &Connection,

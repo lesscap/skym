@@ -8,7 +8,7 @@ pub mod views;
 
 use crate::config::{Endpoint, ServerConfig, sha256_hex};
 use crate::store::Store;
-use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -17,6 +17,7 @@ use axum::{Json, Router};
 use jiff::Timestamp;
 use skym_core::subject::HostId;
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -86,10 +87,34 @@ fn token_hash(headers: &HeaderMap) -> Option<String> {
 #[derive(Clone)]
 pub struct ReportingHost(pub HostId);
 
+/// The address a report comes from, as far as the server can tell.
+#[derive(Clone)]
+pub struct ReportingAddr(pub Option<String>);
+
+/// The client's address: the proxy's `X-Real-IP` when the peer is a proxy on this machine or
+/// a private network (the reverse proxy in front), else the peer itself, so a client on the
+/// internet cannot claim another address.
+pub fn client_ip(peer: Option<IpAddr>, forwarded: Option<&str>) -> Option<String> {
+    let peer = peer.map(|p| p.to_canonical());
+    let trusted = peer.is_some_and(|p| match p {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local(),
+    });
+    let header = forwarded.and_then(|f| f.trim().parse::<IpAddr>().ok());
+    match (trusted, header) {
+        (true, Some(ip)) => Some(ip.to_string()),
+        _ => peer.map(|p| p.to_string()),
+    }
+}
+
 async fn require_host(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     match token_hash(request.headers()).and_then(|h| state.hosts.get(&h).cloned()) {
         Some(host) => {
+            let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+            let forwarded = request.headers().get("x-real-ip").and_then(|v| v.to_str().ok());
+            let addr = client_ip(peer, forwarded);
             request.extensions_mut().insert(ReportingHost(host));
+            request.extensions_mut().insert(ReportingAddr(addr));
             next.run(request).await
         }
         None => ApiError::unauthorized().into_response(),
@@ -140,5 +165,32 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let body = serde_json::json!({ "error": self.error, "message": self.message });
         (self.status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_ip;
+
+    #[test]
+    fn only_a_nearby_proxy_may_name_the_client() {
+        let ip = |peer: Option<&str>, header| client_ip(peer.map(|p| p.parse().unwrap()), header);
+        assert_eq!(ip(Some("172.18.0.5"), Some("8.149.234.78")).as_deref(), Some("8.149.234.78"));
+        assert_eq!(ip(Some("127.0.0.1"), Some(" 2001:db8::1 ")).as_deref(), Some("2001:db8::1"));
+        assert_eq!(ip(Some("::1"), Some("8.8.8.8")).as_deref(), Some("8.8.8.8"));
+        assert_eq!(ip(Some("fd00::5"), Some("8.8.8.8")).as_deref(), Some("8.8.8.8"));
+        let mapped = ip(Some("::ffff:172.18.0.5"), Some("8.8.8.8"));
+        assert_eq!(mapped.as_deref(), Some("8.8.8.8"), "a proxy seen through an IPv6 socket");
+        let public = ip(Some("::ffff:203.0.113.9"), Some("8.8.8.8"));
+        assert_eq!(public.as_deref(), Some("203.0.113.9"), "stored as plain IPv4");
+        assert_eq!(
+            ip(Some("203.0.113.9"), Some("8.8.8.8")).as_deref(),
+            Some("203.0.113.9"),
+            "a client on the internet cannot claim another address"
+        );
+        assert_eq!(ip(Some("2001:db8::9"), Some("8.8.8.8")).as_deref(), Some("2001:db8::9"));
+        assert_eq!(ip(Some("10.0.0.2"), Some("not an address")).as_deref(), Some("10.0.0.2"));
+        assert_eq!(ip(Some("10.0.0.2"), None).as_deref(), Some("10.0.0.2"));
+        assert_eq!(ip(None, Some("8.8.8.8")), None, "no peer, no trust");
     }
 }

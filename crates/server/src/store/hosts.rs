@@ -19,6 +19,8 @@ pub struct HostRow {
     pub last_seen: Timestamp,
     /// When skym first heard from the host.
     pub first_seen: Timestamp,
+    /// The address it last reported from.
+    pub remote_addr: Option<String>,
 }
 
 #[derive(Clone)]
@@ -30,7 +32,7 @@ pub struct WorkloadRow {
 }
 
 const HOST_COLUMNS: &str = "id, facts_json, state_json, errors_json, last_report_ts, last_seen, \
-     COALESCE(first_seen, last_seen)";
+     COALESCE(first_seen, last_seen), remote_addr";
 
 fn host_row(r: &rusqlite::Row) -> rusqlite::Result<HostRow> {
     Ok(HostRow {
@@ -41,6 +43,7 @@ fn host_row(r: &rusqlite::Row) -> rusqlite::Result<HostRow> {
         last_report_ts: parsed(r.get(4)?)?,
         last_seen: parsed(r.get(5)?)?,
         first_seen: parsed(r.get(6)?)?,
+        remote_addr: r.get(7)?,
     })
 }
 
@@ -58,16 +61,23 @@ pub fn touch(c: &Connection, id: &str, now: Timestamp) -> rusqlite::Result<()> {
     c.execute("UPDATE hosts SET last_seen = ?2 WHERE id = ?1", params![id, ts(now)]).map(drop)
 }
 
-/// Stores the report's host part. Facts are kept when the report omits them.
-pub fn upsert(c: &Connection, r: &Report, now: Timestamp) -> rusqlite::Result<()> {
+/// Stores the report's host part. Facts are kept when the report omits them, and the
+/// address when it is unknown.
+pub fn upsert(
+    c: &Connection,
+    r: &Report,
+    remote_addr: Option<&str>,
+    now: Timestamp,
+) -> rusqlite::Result<()> {
     c.execute(
-        "INSERT INTO hosts (id, facts_json, facts_hash, state_json, errors_json, last_report_ts, last_seen, first_seen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+        "INSERT INTO hosts (id, facts_json, facts_hash, state_json, errors_json, last_report_ts, last_seen, first_seen, remote_addr)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)
          ON CONFLICT (id) DO UPDATE SET
            facts_json = COALESCE(excluded.facts_json, facts_json),
            facts_hash = COALESCE(excluded.facts_hash, facts_hash),
            state_json = excluded.state_json, errors_json = excluded.errors_json,
-           last_report_ts = excluded.last_report_ts, last_seen = excluded.last_seen",
+           last_report_ts = excluded.last_report_ts, last_seen = excluded.last_seen,
+           remote_addr = COALESCE(excluded.remote_addr, remote_addr)",
         params![
             r.host,
             r.host_facts.as_ref().map(json),
@@ -75,7 +85,8 @@ pub fn upsert(c: &Connection, r: &Report, now: Timestamp) -> rusqlite::Result<()
             json(&r.host_state),
             json(&r.errors),
             ts(r.ts),
-            ts(now)
+            ts(now),
+            remote_addr
         ],
     )
     .map(drop)

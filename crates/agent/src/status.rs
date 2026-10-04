@@ -28,6 +28,7 @@ pub fn host_view(report: &Report, mut findings: Vec<Finding>) -> HostView {
         incidents,
         errors: report.errors.clone(),
         apps: Vec::new(), // the server's to tell
+        ip: None,
     }
 }
 
@@ -50,6 +51,7 @@ fn incident(f: Finding) -> IncidentView {
         muted: false,
         mute_reason: None,
         links: BTreeMap::new(),
+        workload: None,
     }
 }
 

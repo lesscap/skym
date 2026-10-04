@@ -50,10 +50,13 @@ async fn serve(path: &std::path::Path) -> anyhow::Result<()> {
     tasks::spawn(state.store.clone(), state.cfg.clone(), state.started);
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!("listening on {listen}");
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
     Ok(())
 }

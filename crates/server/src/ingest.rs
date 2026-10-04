@@ -40,11 +40,13 @@ pub const MAX_AHEAD: SignedDuration = SignedDuration::from_mins(10);
 /// Agents buffer undelivered reports for a day; anything much older is not a real report.
 const MAX_AGE: SignedDuration = SignedDuration::from_hours(24 * 7);
 
-/// `host` comes from the token; the report's own host fields are replaced by it. `apps` are
+/// `host` comes from the token; the report's own host fields are replaced by it.
+/// `remote_addr` is where the report came from, when known. `apps` are
 /// the configured applications (those of other hosts are ignored).
 pub fn ingest(
     conn: &mut Connection,
     host: &str,
+    remote_addr: Option<&str>,
     apps: &[AppConfig],
     body: &[u8],
     now: Timestamp,
@@ -71,7 +73,7 @@ pub fn ingest(
     let stored = hosts::stored_facts(&tx, host)?;
     let events = diff::events(prev.as_ref().and_then(|p| p.facts.as_ref()), &stored, &report);
     history::insert_events(&tx, host, &events)?;
-    hosts::upsert(&tx, &report, now)?;
+    hosts::upsert(&tx, &report, remote_addr, now)?;
     let agent = diff::reporting_agent(&report);
     for w in &report.workloads {
         hosts::upsert_workload(&tx, w, agent, now)?;

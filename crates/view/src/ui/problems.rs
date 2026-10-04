@@ -1,6 +1,6 @@
 //! The problems tab: every open problem, new ones first, each named by its application.
 
-use super::{Theme, age, block, empty_row, reason};
+use super::{Theme, age, block, draw_preview, empty_row, preview, reason, with_preview};
 use crate::app::App;
 use crate::names;
 use crate::problems::Row;
@@ -13,6 +13,16 @@ use ratatui::widgets::{Cell, Row as TableRow, Table, TableState};
 use skym_core::rules::Severity;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
+    let (area, preview_area) = with_preview(area, app.preview);
+    if let Some(at) = preview_area {
+        match app.problem_rows(now).get(app.frame().cursor) {
+            Some(r) => {
+                let title = format!(" {} · {} ", app.app_name(r), r.host);
+                draw_preview(f, at, title, preview::problem(app, r, now, theme), theme);
+            }
+            None => draw_preview(f, at, " Preview ".into(), vec![], theme),
+        }
+    }
     let groups = app.problem_groups(now);
     // Tables have no spanning cells: section lines put their text in the app column.
     let header = |text: &str, color: Color| {

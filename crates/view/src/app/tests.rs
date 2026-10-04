@@ -30,6 +30,7 @@ fn incident(subject: &str) -> IncidentView {
         mute_reason: None,
         links: BTreeMap::new(),
         observed_since: Some(t(0)),
+        workload: None,
     }
 }
 
@@ -48,6 +49,14 @@ fn host(id: &str) -> HostOverview {
         disks: vec![],
         apps: 1,
         apps_in_trouble: 1,
+        os: None,
+        kernel: None,
+        arch: None,
+        cpu_count: None,
+        boot_time: None,
+        docker_version: None,
+        agent_version: None,
+        ip: None,
     }
 }
 
@@ -83,6 +92,9 @@ fn summary(key: &str, env: Option<&str>, status: Status) -> AppSummary {
         endpoints: vec![],
         incidents: vec![],
         links: BTreeMap::new(),
+        workloads: vec![],
+        deploys: vec![],
+        exceptions_1h: 0,
     }
 }
 
@@ -124,6 +136,12 @@ fn app_view(key: &str) -> AppView {
         state_since: None,
         image: None,
         links: BTreeMap::new(),
+        restart_policy: None,
+        ports: vec![],
+        memory_used_bytes: None,
+        memory_limit_bytes: None,
+        restarts_last_hour: 0,
+        health_output: None,
     };
     AppView {
         app: summary(key, None, Status::Critical),
@@ -364,4 +382,14 @@ fn refreshing_the_applications_tab_reads_them_once() {
     let mut app = loaded();
     press(&mut app, &[Key::Tab]);
     assert_eq!(press(&mut app, &[Key::Char('r')]), [Request::Overview, Request::Apps]);
+}
+
+#[test]
+fn p_shows_and_hides_the_preview() {
+    let mut app = loaded();
+    assert!(app.preview, "on by default");
+    press(&mut app, &[Key::Char('p')]);
+    assert!(!app.preview);
+    press(&mut app, &[Key::Char('p')]);
+    assert!(app.preview);
 }

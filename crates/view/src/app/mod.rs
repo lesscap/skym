@@ -116,6 +116,8 @@ pub struct App {
     pub editing: bool,
     pub show_info: bool,
     pub show_muted: bool,
+    /// The selected row's preview beside or under the tab's list.
+    pub preview: bool,
     /// On the applications page: every environment unfolded.
     pub all_envs: bool,
     pub help: bool,
@@ -143,6 +145,7 @@ impl Default for App {
             editing: false,
             show_info: false,
             show_muted: false,
+            preview: true,
             all_envs: false,
             help: false,
             error: None,

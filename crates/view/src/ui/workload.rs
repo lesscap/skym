@@ -187,5 +187,16 @@ fn fact_lines(facts: Option<&WorkloadFacts>) -> Vec<Line<'static>> {
                 .map_or("no limit".into(), |b| format!("limit {} MB", b / 1_000_000))
         )),
         Line::from(format!(" logs      {logs}")),
+        Line::from(format!(
+            " digest    {}",
+            f.image_digest.as_deref().map_or("—", |d| {
+                let hex = d.trim_start_matches("sha256:");
+                hex.get(..12).unwrap_or(hex)
+            })
+        )),
+        Line::from(format!(
+            " created   {}",
+            f.created.map_or("—".into(), |t| super::local(t, "%Y-%m-%d %H:%M"))
+        )),
     ]
 }

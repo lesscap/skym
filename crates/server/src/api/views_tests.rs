@@ -162,6 +162,7 @@ fn row(id: &str, seen: i64) -> HostRow {
         last_report_ts: at(seen),
         last_seen: at(seen),
         first_seen: at(-60),
+        remote_addr: None,
     }
 }
 
@@ -179,6 +180,9 @@ fn summary(key: &str, status: Status) -> AppSummary {
         endpoints: vec![],
         incidents: vec![],
         links: BTreeMap::new(),
+        workloads: vec![],
+        deploys: vec![],
+        exceptions_1h: 0,
     }
 }
 
@@ -260,13 +264,47 @@ fn a_host_overview_shows_its_resources_and_which_disk_fills_up() {
     assert_eq!(h.load_1m, Some(r.state.load_1m));
     assert_eq!(h.memory_used_bytes, Some(r.state.memory_used_bytes));
     assert_eq!(h.memory_total_bytes, r.facts.as_ref().map(|f| f.memory_total_bytes));
-    let expected = (mount.used_bytes * 100 / mount.total_bytes) as u8;
+    let percent = |part: u64, whole: u64| (part * 100 / whole) as u8;
     assert_eq!(
         h.disks[0],
-        DiskUse { path: mount.path.clone(), used_percent: expected, filling: true }
+        DiskUse {
+            path: mount.path.clone(),
+            used_percent: percent(mount.used_bytes, mount.total_bytes),
+            filling: true,
+            total_bytes: mount.total_bytes,
+            free_bytes: mount.total_bytes - mount.used_bytes,
+            inodes_percent: percent(mount.inodes_used, mount.inodes_total),
+            fs_type: r
+                .facts
+                .as_ref()
+                .and_then(|f| f.mounts.iter().find(|m| m.path == mount.path))
+                .map(|m| m.fs_type.clone()),
+        }
     );
+    assert!(h.disks[0].fs_type.is_some(), "the fixture names its file system");
+    let facts = r.facts.as_ref().unwrap();
+    assert_eq!(
+        (h.os.as_deref(), h.kernel.as_deref(), h.cpu_count, h.boot_time),
+        (
+            Some(facts.os.as_str()),
+            Some(facts.kernel.as_str()),
+            Some(facts.cpu_count),
+            Some(facts.boot_time)
+        )
+    );
+    assert_eq!(
+        (h.arch.as_deref(), h.agent_version.as_deref()),
+        (Some(facts.arch.as_str()), Some(facts.agent_version.as_str()))
+    );
+    assert_eq!(h.docker_version, facts.docker_version);
     assert!(h.disks[1..].iter().all(|d| !d.filling), "only that disk, only for DISK_FILLING");
     assert_eq!(h.disks.last().map(|d| d.path.as_str()), Some("/backup"));
+    let mut seen = r.clone();
+    seen.remote_addr = Some("203.0.113.7".into());
+    assert_eq!(
+        host_overview(&"x".to_string(), Some(&seen), &[], &[], at(5)).ip.as_deref(),
+        Some("203.0.113.7")
+    );
     let silent = host_overview(&"y".to_string(), None, &[], &[], at(5));
     assert_eq!((silent.status, silent.disks.len(), silent.load_1m), (Status::Unknown, 0, None));
 }
