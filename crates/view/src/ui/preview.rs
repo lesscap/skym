@@ -2,6 +2,7 @@
 
 use super::{Theme, ago, local, reason};
 use crate::app::App;
+use crate::apps::{Group, UNCLASSIFIED};
 use crate::problems::{Age, Row};
 use jiff::Timestamp;
 use ratatui::style::{Color, Style};
@@ -99,6 +100,36 @@ fn label(text: &str, theme: Theme) -> Span<'static> {
     Span::styled(format!(" {text:<9}"), theme.dim())
 }
 
+/// `1 app`, `43 apps`.
+pub fn apps(n: usize) -> String {
+    if n == 1 { "1 app".into() } else { format!("{n} apps") }
+}
+
+/// `tags     acme · billing`, when it has any.
+fn tags(tags: &[String], theme: Theme) -> Option<Line<'static>> {
+    (!tags.is_empty()).then(|| Line::from(vec![label("tags", theme), Span::raw(tags.join(" · "))]))
+}
+
+/// A group of the applications tab: everything in it, those in trouble first.
+pub fn group(g: &Group, theme: Theme) -> Vec<Line<'static>> {
+    let trouble = g.all.iter().filter(|a| a.status != Status::Ok).count();
+    let state = if g.open { "open" } else { "folded to its trouble (⏎ opens)" };
+    let mut names = vec![label("apps", theme)];
+    for (i, a) in g.all.iter().enumerate() {
+        if i > 0 {
+            names.push(Span::raw(" · "));
+        }
+        if a.status != Status::Ok {
+            names.extend([theme.status(a.status), Span::raw(" ")]);
+        }
+        names.push(Span::raw(a.name.clone()));
+    }
+    vec![
+        Line::from(format!(" {} · {trouble} in trouble · {state}", apps(g.all.len()))),
+        Line::from(names),
+    ]
+}
+
 /// One problem: all of it, its application, its workload and its host.
 pub fn problem(app: &App, r: &Row, now: Timestamp, theme: Theme) -> Vec<Line<'static>> {
     let i = r.incident;
@@ -138,7 +169,7 @@ pub fn problem(app: &App, r: &Row, now: Timestamp, theme: Theme) -> Vec<Line<'st
 }
 
 fn app_line(a: &AppSummary) -> String {
-    let env = a.env.as_deref().unwrap_or("unclassified");
+    let env = a.env.as_deref().unwrap_or(UNCLASSIFIED);
     let note = a.note.as_deref().map_or(String::new(), |n| format!(" · {n}"));
     format!("{} · {env}{note} · {}/{} running", a.name, a.running, a.services)
 }
@@ -195,16 +226,12 @@ pub fn app_head(a: &AppSummary, theme: Theme) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![
         Span::raw(" "),
         theme.status(a.status),
-        Span::raw(format!(
-            " {}  {}  {}",
-            a.name,
-            a.key,
-            a.env.as_deref().unwrap_or("unclassified")
-        )),
+        Span::raw(format!(" {}  {}  {}", a.name, a.key, a.env.as_deref().unwrap_or(UNCLASSIFIED))),
     ])];
     if let Some(note) = &a.note {
         lines.push(Line::from(vec![label("note", theme), Span::raw(note.clone())]));
     }
+    lines.extend(tags(&a.tags, theme));
     for e in &a.endpoints {
         let answer = match (e.http_status, e.latency_ms) {
             (Some(s), Some(ms)) => format!("{s} in {ms}ms"),
@@ -284,6 +311,7 @@ pub fn host_body(app: &App, h: &HostOverview, now: Timestamp, theme: Theme) -> V
             )),
         ]),
     ];
+    lines.extend(tags(&h.tags, theme));
     lines.extend(h.disks.iter().map(|d| disk_line(d, theme)));
     let troubled: Vec<String> = app
         .apps

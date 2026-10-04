@@ -57,6 +57,9 @@ pub struct HostEntry {
     #[serde(default)]
     pub customer: Option<CustomerId>,
     pub token_sha256: String,
+    /// Tags for filtering and grouping; its applications inherit them.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -109,6 +112,9 @@ pub struct AppConfig {
     pub name: Option<String>,
     pub env: Option<String>,
     pub note: Option<String>,
+    /// Its own tags, besides its host's.
+    #[serde(default)]
+    pub tags: Vec<String>,
     #[serde(default)]
     pub probes: Vec<AppProbe>,
 }
@@ -201,6 +207,17 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
         }
         if a.id.is_external() && a.probes.is_empty() {
             bail!("external app {} has no probes: there is nothing to watch", a.id);
+        }
+    }
+    let tagged = cfg.hosts.iter().map(|h| (format!("host {}", h.id), &h.tags));
+    let tagged = tagged.chain(cfg.apps.iter().map(|a| (format!("app {}", a.id), &a.tags)));
+    for (owner, tags) in tagged {
+        let bad = |t: &&String| {
+            t.is_empty()
+                || !t.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
+        };
+        if let Some(t) = tags.iter().find(bad) {
+            bail!("{owner}: tag {t:?} must be lowercase letters, digits, '.', '_' or '-'");
         }
     }
     if let Some(m) = cfg.mute.iter().find(|m| matches!(m.subject, Subject::Unknown(_))) {
@@ -343,6 +360,27 @@ mod tests {
         let old = with_app("[[endpoints]]\nurl = \"https://a.example/\"\ncustomer = \"acme\"\n");
         let err = format!("{:#}", parse(&old).unwrap_err());
         assert!(err.contains("[[apps.probes]]") && err.contains("external"), "{err}");
+    }
+
+    #[test]
+    fn tags_parse_and_bad_ones_are_named() {
+        let tagged = format!(
+            "[[hosts]]\nid = \"x\"\ntags = [\"acme\", \"cn-1.a_b\"]\ntoken_sha256 = \"{}\"\n",
+            hash('a')
+        );
+        let cfg =
+            parse(&(tagged.clone() + "[[apps]]\nid = \"x/shop\"\ntags = [\"billing\"]\n")).unwrap();
+        assert_eq!(
+            (cfg.hosts[0].tags.len(), cfg.apps[0].tags.as_slice()),
+            (2, ["billing".to_string()].as_slice())
+        );
+        for bad in ["a b", "", "x:y", "Acme"] {
+            let text = format!("{tagged}[[apps]]\nid = \"x/shop\"\ntags = [{bad:?}]\n");
+            let err = format!("{:#}", parse(&text).unwrap_err());
+            assert!(err.contains(&format!("app x/shop: tag {bad:?}")), "{err}");
+        }
+        let host_bad = tagged.replace("acme", "ac me");
+        assert!(parse(&host_bad).is_err(), "a host's tags are checked too");
     }
 
     #[test]

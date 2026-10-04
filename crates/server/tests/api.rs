@@ -37,6 +37,7 @@ fn app_configured(mute: Vec<Mute>, apps: Vec<AppConfig>) -> (Router, AppState) {
             id: "x".into(),
             customer: None,
             token_sha256: sha256_hex(HOST_TOKEN),
+            tags: vec!["acme".into()],
         }],
         readers: vec![Reader { name: "ops".into(), token_sha256: sha256_hex(READER_TOKEN) }],
         ..ServerConfig::default()
@@ -444,6 +445,7 @@ async fn applications_are_listed_described_and_missed() {
         name: Some("Shop".into()),
         env: Some("prod".into()),
         note: Some("the web shop".into()),
+        tags: vec!["billing".into()],
         probes: vec![AppProbe {
             url: "https://shop.example.com/".into(),
             expect: vec![],
@@ -470,12 +472,14 @@ async fn applications_are_listed_described_and_missed() {
         (&"Shop".into(), &"critical".into(), &"APP_MISSING".into())
     );
     assert_eq!(missing["endpoints"][0]["url"], "https://shop.example.com/");
+    assert_eq!(missing["tags"], serde_json::json!(["acme", "billing"]), "its host's and its own");
     assert!(!list.to_string().contains("s3cret"), "a probe token never leaves the server");
 
     let overview = get(&app, "/api/overview").await;
     let gone =
         overview["problems"].as_array().unwrap().iter().find(|i| i["subject"] == "app:x/shop");
     assert_eq!(gone.map(|i| &i["app"]), Some(&"x/shop".into()), "a missing app is its own problem");
+    assert_eq!(overview["hosts"][0]["tags"], serde_json::json!(["acme"]));
 
     let probed = state.probed.clone();
     for m in [2, 1] {

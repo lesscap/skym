@@ -1,6 +1,7 @@
 use super::*;
 use crate::api::{Payload, Request};
 use crate::app::{Frame, Msg, Screen, update};
+use crate::apps::Grouping;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use skym_core::rules::IncidentCode;
@@ -62,6 +63,7 @@ fn host(id: &str, status: Status, disks: Vec<DiskUse>) -> HostOverview {
         docker_version: None,
         agent_version: None,
         ip: None,
+        tags: vec![],
     }
 }
 
@@ -242,6 +244,7 @@ fn the_hosts_tab_shows_load_disks_and_apps() {
         workloads: vec![],
         deploys: vec![],
         exceptions_1h: 0,
+        tags: vec![],
     };
     let apps = AppList { apps: vec![warn("x/a"), warn("x/b")] };
     update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(apps)))), t(120));
@@ -279,6 +282,7 @@ fn a_host_shows_its_own_problems_and_its_apps() {
         workloads: vec![],
         deploys: vec![],
         exceptions_1h: 0,
+        tags: vec![],
     };
     view.apps = vec![
         app_summary("x/app", "prod", Status::Critical),
@@ -399,6 +403,7 @@ fn the_applications_page_groups_by_environment() {
         workloads: vec![],
         deploys: vec![],
         exceptions_1h: 0,
+        tags: vec![],
     };
     let list = AppList {
         apps: vec![
@@ -413,21 +418,26 @@ fn the_applications_page_groups_by_environment() {
         ],
     };
     // The list alone; the preview has its own tests.
-    let mut app = App { preview: false, ..App::default() };
+    let open = [(Grouping::Env, "prod".to_string())].into();
+    let mut app = App { preview: false, open_groups: open, ..App::default() };
     update(&mut app, Msg::Key(crate::app::Key::Tab), t(120));
     update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(list)))), t(120));
     let lines = render(&app, Theme { color: false }, 100, 14);
     let shop = line_of(&lines, " shop ");
-    assert!(line_of(&lines, "PROD") < shop && shop < line_of(&lines, "TEST"));
+    assert!(line_of(&lines, "▾ PROD") < shop && shop < line_of(&lines, "▸ TEST"));
     assert!(
         lines[shop].contains("shop.example.com  84ms") && lines[shop].ends_with("1h│"),
         "{}",
         lines[shop]
     );
     assert!(lines[shop].contains("1/2"), "running of all");
-    line_of(&lines, "1 more, all ok (e)");
-    assert!(line_of(&lines, "UNCLASSIFIED") < line_of(&lines, " hbbs "));
-    line_of(&lines, "Applications (3)");
+    assert!(lines[line_of(&lines, "▸ TEST")].contains("1 app "), "folded, all ok");
+    assert!(!lines.iter().any(|l| l.contains(" shop-test ") || l.contains(" hbbs ")));
+    line_of(&lines, "▸ UNCLASSIFIED");
+    line_of(&lines, "Applications (3) · by environment");
+    app.grouping = Grouping::Host;
+    let lines = render(&app, Theme { color: false }, 100, 14);
+    assert!(line_of(&lines, "▸ i ") < line_of(&lines, "▸ y "), "{lines:#?}");
 }
 
 #[test]
@@ -535,6 +545,7 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
             to: "1.4".into(),
         }],
         exceptions_1h: 7,
+        tags: vec!["acme".into(), "eu".into()],
     };
     a.endpoints[0].cert_expires_at = Some(t(60 * 24 * 30));
     let mut app = App::default();
@@ -550,7 +561,12 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
     );
     app.stack = vec![Frame { screen: Screen::Apps, cursor: 0, expanded: None }];
     let lines = render(&app, Theme { color: false }, 120, 24);
+    line_of(&lines, "1 app · 1 in trouble · folded to its trouble");
+    assert!(lines[line_of(&lines, " apps ")].contains("! Shop"), "the group's applications");
+    app.stack[0].cursor = 1;
+    let lines = render(&app, Theme { color: false }, 120, 30);
     line_of(&lines, "the web shop");
+    assert!(lines[line_of(&lines, " tags ")].contains("acme · eu"));
     assert!(lines[line_of(&lines, "200 in 84ms")].contains("cert until"));
     assert!(lines[line_of(&lines, "web  1.3 → 1.4")].contains("1h ago"));
     line_of(&lines, "7 application exceptions in the last hour");

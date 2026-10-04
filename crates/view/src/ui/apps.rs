@@ -2,7 +2,8 @@
 
 use super::preview::usage;
 use super::{Theme, ago, block, draw_preview, empty_row, preview, problem_table, with_preview};
-use crate::app::App;
+use crate::app::{App, AppRow};
+use crate::apps::{Group, Grouping};
 use crate::names;
 use jiff::Timestamp;
 use ratatui::Frame;
@@ -18,39 +19,32 @@ pub fn list(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
     let Some(all) = &app.apps.value else {
         return f.render_widget(Paragraph::new(" loading…"), area);
     };
+    let listed = app.app_rows();
     let (area, preview_area) = with_preview(area, app.preview);
     if let Some(at) = preview_area {
-        let selected = app.app_rows().get(app.frame().cursor).copied();
-        let lines = selected.map_or_else(Vec::new, |a| preview::application(a, now, theme));
-        let title =
-            selected.map_or(" Preview ".into(), |a| format!(" {} · {} ", a.name, a.key.host));
+        let (title, lines) = match listed.get(app.frame().cursor) {
+            Some(AppRow::App(a)) => {
+                (format!(" {} · {} ", a.name, a.key.host), preview::application(a, now, theme))
+            }
+            Some(AppRow::Group(g)) => (format!(" {} ", g.name), preview::group(g, theme)),
+            None => (" Preview ".into(), Vec::new()),
+        };
         draw_preview(f, at, title, lines, theme);
     }
-    let header = |text: String| {
-        let style = Style::new().add_modifier(Modifier::BOLD);
-        Row::new([Cell::from(""), Cell::from(Line::styled(text, style))])
-    };
-    let mut rows = Vec::new();
-    let mut selectable = Vec::new();
-    for g in app.app_groups() {
-        rows.push(header(g.env.unwrap_or("unclassified").to_uppercase()));
-        for a in &g.apps {
-            selectable.push(rows.len());
-            rows.push(app_row(a, a.key.host.clone(), now, theme));
-        }
-        if g.hidden > 0 {
-            rows.push(empty_row(1, format!("· {} more, all ok (e)", g.hidden), theme));
-        }
-    }
-    if selectable.is_empty() {
+    let mut rows: Vec<Row> = listed
+        .iter()
+        .map(|r| match r {
+            AppRow::Group(g) => group_row(g, app.grouping, theme),
+            AppRow::App(a) => app_row(a, a.key.host.clone(), now, theme),
+        })
+        .collect();
+    if rows.is_empty() {
         rows.push(empty_row(1, "(none)".into(), theme));
     }
-    let widths = APP_COLUMNS;
-    let title =
-        format!(" Applications ({}){} ", all.apps.len(), if app.all_envs { " · all" } else { "" });
-    let selected = selectable.get(app.frame().cursor).copied();
+    let title = format!(" Applications ({}) · by {} ", all.apps.len(), app.grouping.label());
+    let selected = (!listed.is_empty()).then_some(app.frame().cursor);
     let mut state = TableState::default().with_selected(selected);
-    let table = Table::new(rows, widths)
+    let table = Table::new(rows, APP_COLUMNS)
         .header(
             Row::new(["", "APP", "HOST", "SVC", "UP", "URL", "ERR 1H", "DEPLOYED"])
                 .style(theme.dim()),
@@ -58,6 +52,24 @@ pub fn list(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
         .block(block(title, theme))
         .row_highlight_style(theme.selected(true));
     f.render_stateful_widget(table, area, &mut state);
+}
+
+/// `✗ ▸ PROD  43 apps`: its worst status, folded or open, and how many it has.
+fn group_row(g: &Group, by: Grouping, theme: Theme) -> Row<'static> {
+    let worst = match g.worst() {
+        Status::Ok => Span::raw(""),
+        s => theme.status(s),
+    };
+    let name = if by == Grouping::Env { g.name.to_uppercase() } else { g.name.clone() };
+    let mark = if g.open { "▾" } else { "▸" };
+    Row::new([
+        Cell::from(Line::from(vec![Span::raw(" "), worst])),
+        Cell::from(Line::styled(
+            format!("{mark} {name}"),
+            Style::new().add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Line::styled(preview::apps(g.all.len()), theme.dim())),
+    ])
 }
 
 /// Status, name, host or environment, services, up for, first URL, errors, deployed.

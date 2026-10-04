@@ -37,9 +37,9 @@ token_sha256 = "…"
 | --- | --- | --- |
 | `GET /api` | How do I use this? | Endpoint descriptions |
 | `GET /api/overview` | Where is something wrong right now? | `problems`: every open, unmuted incident, worst and oldest first, each with its application (`app`, else it is its host's own); `hosts`: every host with its status, last report age, load, memory, disks and applications, most urgent first |
-| `GET /api/apps` | Which applications exist, where, and are they up? | Every application (compose project, or lone container or systemd unit) with its name, environment, note, status, URLs, open incidents, its `workloads` (image, run state, restart policy, ports, memory against its limit, restarts in the last hour), its latest `deploys` and `exceptions_1h`; most urgent first |
+| `GET /api/apps` | Which applications exist, where, and are they up? | Every application (compose project, or lone container or systemd unit) with its name, environment, note, status, URLs, open incidents, its `workloads` (image, run state, restart policy, ports, memory against its limit, restarts in the last hour), its latest `deploys`, `exceptions_1h` and `tags` (its host's and its own); most urgent first |
 | `GET /api/apps/{host}/{project}` | What is this application, and how is it? | The application and its workloads; lone containers and systemd units at `/api/apps/{host}/{project}/{service}` |
-| `GET /api/hosts` | Which hosts are there, and how loaded? | The overview's `hosts`: also the system (`os`, `kernel`, `arch`, `cpu_count`, `boot_time`, `docker_version`, `agent_version`), the address it reports from (`ip`) and every disk's size, free space and inodes |
+| `GET /api/hosts` | Which hosts are there, and how loaded? | The overview's `hosts`: also the system (`os`, `kernel`, `arch`, `cpu_count`, `boot_time`, `docker_version`, `agent_version`), the address it reports from (`ip`), its `tags` and every disk's size, free space and inodes |
 | `GET /api/hosts/{host}` | What is going on with this host? | Facts, state, its applications, workloads with their status, open incidents |
 | `GET /api/hosts/{host}/workloads/{project}/{service}` | What is going on with this application? | Facts, state, recent exception groups, recent events |
 | `GET /api/timeline` | When did it start, and what else happened? | Incident changes and events, merged and sorted by time |

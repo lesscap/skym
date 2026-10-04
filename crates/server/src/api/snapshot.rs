@@ -112,6 +112,6 @@ impl Snapshot {
                 views::endpoint(e, row, open, s.cfg.report_interval, self.now)
             })
             .collect();
-        apps::summaries(&self.workloads, &s.cfg.apps, &endpoints, open, &self.history)
+        apps::summaries(&self.workloads, &s.cfg.hosts, &s.cfg.apps, &endpoints, open, &self.history)
     }
 }

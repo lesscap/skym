@@ -4,6 +4,7 @@ mod api;
 mod app;
 mod apps;
 mod connect;
+mod filter;
 mod names;
 mod problems;
 mod ui;

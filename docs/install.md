@@ -53,6 +53,10 @@ A listed container application that disappears from its host opens `APP_MISSING`
 
 A service that runs where skym does not watch (a third-party API, say) can be listed for its URLs alone, as `id = "external/<name>"` with at least one probe; it is never missing.
 
+### Tags
+
+Hosts and applications take `tags` (lowercase letters, digits, `.`, `_` and `-`): a customer's hosts, a team's applications. An application carries its host's tags and its own; an external one only its own. `skym-view` groups applications by tag and filters by `tag:<tag>`; the API returns them for agents to do the same.
+
 ### Probes
 
 The server probes every `[[apps.probes]]` URL from its own host, once per report interval: whether it answers (by default with a status below 400, else one in `expect`), and when its certificate expires. Every URL belongs to an application, so its problems show as that application's. See the examples in [`deploy/server.example.toml`](../deploy/server.example.toml) and the [judgement rules](judgement.md). (Standalone `[[endpoints]]` and `[[customers]]` from earlier versions: move each URL under its application's probes; `customers` and a host's `customer` are ignored.)

@@ -353,6 +353,7 @@ mod tests {
             name: None,
             env: env.map(String::from),
             note: None,
+            tags: vec![],
             probes: vec![],
         }
     }

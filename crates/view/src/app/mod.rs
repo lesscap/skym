@@ -2,11 +2,13 @@
 //! requests to make, and `main` makes them.
 
 use crate::api::{FetchError, Payload, Request};
+use crate::apps::Grouping;
 use jiff::{SignedDuration, Timestamp};
 use skym_core::subject::{AppKey, HostId, WorkloadKey};
 use skym_core::view::{
     AppList, AppView, ExceptionList, HostView, IncidentList, Overview, Timeline, WorkloadView,
 };
+use std::collections::BTreeSet;
 
 pub const REFRESH: SignedDuration = SignedDuration::from_secs(30);
 pub const WINDOWS: [&str; 3] = ["6h", "24h", "7d"];
@@ -118,8 +120,9 @@ pub struct App {
     pub show_muted: bool,
     /// The selected row's preview beside or under the tab's list.
     pub preview: bool,
-    /// On the applications page: every environment unfolded.
-    pub all_envs: bool,
+    /// How the applications tab groups them, and which groups are open (of every grouping).
+    pub grouping: Grouping,
+    pub open_groups: BTreeSet<(Grouping, String)>,
     pub help: bool,
     /// The last failure; the data stays as it was.
     pub error: Option<FetchError>,
@@ -146,7 +149,8 @@ impl Default for App {
             show_info: false,
             show_muted: false,
             preview: true,
-            all_envs: false,
+            grouping: Grouping::default(),
+            open_groups: BTreeSet::new(),
             help: false,
             error: None,
             last_refresh: None,
@@ -237,6 +241,8 @@ pub fn update(app: &mut App, msg: Msg, now: Timestamp) -> Vec<Request> {
 
 mod keys;
 mod lists;
+
+pub use lists::AppRow;
 
 #[cfg(test)]
 mod tests;

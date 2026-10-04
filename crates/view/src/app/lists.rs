@@ -1,12 +1,20 @@
 //! What the screens list, derived from the data: problems, applications, hosts, services.
 
 use super::{App, Screen};
-use crate::apps::{self, Group, groups};
+use crate::apps::{Group, groups};
+use crate::filter::Filter;
 use crate::names;
 use crate::problems::{Problems, Row, problems};
 use jiff::Timestamp;
 use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{AppSummary, HostOverview, Status, WorkloadSummary};
+
+/// A row of the applications tab.
+#[derive(Debug)]
+pub enum AppRow<'a> {
+    Group(Group<'a>),
+    App(&'a AppSummary),
+}
 
 impl App {
     /// The problems tab, filtered by app, host, what and why.
@@ -17,11 +25,16 @@ impl App {
             _ => &[],
         };
         let mut p = problems(overview, muted, now);
+        let filter = self.filter();
         for group in [&mut p.new, &mut p.ongoing, &mut p.info] {
             group.retain(|r| {
                 let i = r.incident;
                 let what = names::what(&i.subject);
-                self.matches(&format!("{} {} {what} {}", self.app_name(r), r.host, i.detail))
+                let text = format!("{} {} {what} {}", self.app_name(r), r.host, i.detail);
+                let app = r.app().and_then(|key| self.app_summary(key));
+                let host = overview.hosts.iter().find(|h| h.id == r.host);
+                let of_app = r.app().is_some();
+                filter.problem(r.host, of_app, app, host.map_or(&[], |h| &h.tags), text)
             });
         }
         p
@@ -49,37 +62,43 @@ impl App {
         self.apps.value.iter().flat_map(|l| &l.apps).find(|a| a.key == *key)
     }
 
-    /// The hosts tab: most urgent first, filtered by name.
+    /// The hosts tab: most urgent first, filtered.
     pub fn host_rows(&self) -> Vec<&HostOverview> {
+        let filter = self.filter();
         let hosts = self.overview.value.iter().flat_map(|o| &o.hosts);
-        hosts.filter(|h| self.matches(&h.id)).collect()
+        hosts.filter(|h| filter.host(h)).collect()
     }
 
-    /// The applications tab's groups, filtered by name, host, URL or note.
-    pub fn app_groups(&self) -> Vec<Group<'_>> {
+    /// The applications tab as listed: each group's header, then what it lists.
+    pub fn app_rows(&self) -> Vec<AppRow<'_>> {
         let list = self.apps.value.as_ref().map_or(&[][..], |l| l.apps.as_slice());
-        groups(list, self.all_envs, |a| self.matches(&apps::text(a)))
-    }
-
-    /// The applications as listed, for moving the selection.
-    pub fn app_rows(&self) -> Vec<&AppSummary> {
-        self.app_groups().into_iter().flat_map(|g| g.apps).collect()
+        let filter = self.filter();
+        let groups = groups(list, self.grouping, &self.open_groups, |a| filter.app(a));
+        groups
+            .into_iter()
+            .flat_map(|g| {
+                let listed: Vec<AppRow> = g.listed().map(AppRow::App).collect();
+                std::iter::once(AppRow::Group(g)).chain(listed)
+            })
+            .collect()
     }
 
     /// A host's applications (the server lists those with problems first), filtered.
     pub fn host_apps(&self) -> Vec<&AppSummary> {
+        let filter = self.filter();
         let apps = self.host.value.iter().flat_map(|h| &h.apps);
-        apps.filter(|a| self.matches(&apps::text(a))).collect()
+        apps.filter(|a| filter.app(a)).collect()
     }
 
     /// An application's services: those with problems first, then by name.
     pub fn services(&self) -> Vec<&WorkloadSummary> {
+        let filter = self.filter();
         let mut list: Vec<&WorkloadSummary> = self
             .app
             .value
             .iter()
             .flat_map(|a| &a.workloads)
-            .filter(|w| self.matches(&names::full(&Subject::Workload(w.key.clone()))))
+            .filter(|w| filter.workload(w, names::full(&Subject::Workload(w.key.clone()))))
             .collect();
         list.sort_by(|a, b| {
             let worse = |w: &WorkloadSummary| w.status != Status::Ok;
@@ -88,8 +107,8 @@ impl App {
         list
     }
 
-    fn matches(&self, name: &str) -> bool {
-        self.filter.as_deref().is_none_or(|f| name.to_lowercase().contains(&f.to_lowercase()))
+    fn filter(&self) -> Filter {
+        Filter::parse(self.filter.as_deref().unwrap_or(""))
     }
 
     /// How many rows the current list has (for moving the selection).

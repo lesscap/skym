@@ -158,7 +158,9 @@ fn bottom_bar(app: &App, theme: Theme) -> Paragraph<'static> {
         Screen::Problems => {
             "↑↓ move  ⏎ open  ⇥ apps  / filter  h hygiene  m muted  p preview  ? help  q quit"
         }
-        Screen::Apps => "↑↓ move  ⏎ open  ⇥ hosts  e all environments  / filter  p preview  ? help",
+        Screen::Apps => {
+            "↑↓ move  ⏎ open/fold  ⇥ hosts  g group  e all  / filter  p preview  ? help"
+        }
         Screen::Hosts => "↑↓ move  ⏎ open  ⇥ problems  / filter  p preview  ? help  q quit",
         Screen::App(_) => "↑↓ move  ⏎ service  ⇥ next tab  / filter  esc back  ? help",
         Screen::Host(_) => "↑↓ move  ⏎ app  t timeline  e exceptions  / filter  esc back  ? help",
@@ -172,12 +174,13 @@ fn bottom_bar(app: &App, theme: Theme) -> Paragraph<'static> {
 fn help(f: &mut Frame, theme: Theme) {
     let lines = [
         "↑↓ j k     move",
-        "⏎          open / expand",
+        "⏎          open / expand (a group of applications: open or fold)",
         "esc ⌫      back (or clear the filter)",
         "⇥          next tab: problems, apps, hosts",
-        "/          filter by name",
+        "/          filter: words, host:<id> env:<env> tag:<tag> !ok",
         "t          timeline (host, service)",
-        "e          exceptions (host); all environments (applications)",
+        "e          exceptions (host); open or fold every group (applications)",
+        "g          group applications by environment, host or tag",
         "[ ]        timeline window: 6h 24h 7d",
         "h          show hygiene (info) problems",
         "p          preview of the selected row (tabs)",

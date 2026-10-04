@@ -339,6 +339,7 @@ fn app(id: &str, env: Option<&str>) -> AppConfig {
         name: None,
         env: env.map(String::from),
         note: None,
+        tags: vec![],
         probes: vec![],
     }
 }
