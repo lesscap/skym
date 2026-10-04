@@ -1,6 +1,6 @@
 use super::snapshot::{MAX_ROWS, Snapshot};
 use super::views;
-use super::{ApiError, AppState, ReportingHost};
+use super::{ApiError, AppState, ReportingAddr, ReportingHost};
 use crate::ingest::{IngestError, MAX_AHEAD, ingest};
 use crate::lifecycle::Incident;
 use crate::store::{history, incidents};
@@ -23,11 +23,12 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 pub async fn report(
     State(s): State<AppState>,
     Extension(ReportingHost(host)): Extension<ReportingHost>,
+    Extension(ReportingAddr(addr)): Extension<ReportingAddr>,
     body: Bytes,
 ) -> ApiResult<Value> {
     let now = Timestamp::now();
     let apps: Vec<_> = s.cfg.apps.iter().filter(|a| a.id.host == host).cloned().collect();
-    match s.store.call(move |c| Ok(ingest(c, &host, &apps, &body, now))).await? {
+    match s.store.call(move |c| Ok(ingest(c, &host, addr.as_deref(), &apps, &body, now))).await? {
         Ok(_) => Ok(Json(json!({ "ok": true }))),
         Err(IngestError::Invalid(message)) => Err(ApiError::bad_request(message)),
         Err(IngestError::Internal(e)) => Err(e.into()),

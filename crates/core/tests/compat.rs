@@ -347,3 +347,39 @@ fn external_apps_run_on_no_host() {
     assert_eq!((partner.host.as_str(), partner.label()), (skym_core::subject::EXTERNAL, "partner"));
     assert!(!"x/partner".parse::<AppKey>().unwrap().is_external());
 }
+
+#[test]
+fn a_workload_shows_its_failing_check_only_while_it_runs() {
+    use skym_core::model::RunState;
+    use skym_core::view::workload_summary;
+    let r = skym_core::fixtures::full_report();
+    let w = &r.workloads[0];
+    let summary = |run: RunState, streak: Option<u32>| {
+        let state = skym_core::model::WorkloadState {
+            run,
+            health_failing_streak: streak,
+            health_output: Some("OCI runtime exec failed:\n  wget: not found".into()),
+            ..w.state.clone()
+        };
+        workload_summary(w.key.clone(), w.facts.as_ref(), &state, &[], Default::default())
+    };
+    let shown = summary(RunState::Running, Some(3)).health_output;
+    assert_eq!(shown.as_deref(), Some("OCI runtime exec failed: wget: not found"), "on one line");
+    assert_eq!(
+        summary(RunState::Exited, Some(3)).health_output,
+        None,
+        "a stopped one says nothing now"
+    );
+    assert_eq!(summary(RunState::Running, Some(0)).health_output, None, "passing again");
+    assert_eq!(summary(RunState::Running, None).health_output, None);
+    let s = summary(RunState::Running, None);
+    assert_eq!(
+        (s.restart_policy, s.ports, s.memory_limit_bytes),
+        (
+            w.facts.as_ref().unwrap().restart_policy.clone(),
+            w.facts.as_ref().unwrap().ports.clone(),
+            w.facts.as_ref().unwrap().memory_limit_bytes,
+        )
+    );
+    assert_eq!(s.restarts_last_hour, w.state.restarts.len() as u32);
+}

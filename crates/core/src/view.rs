@@ -84,6 +84,9 @@ pub struct IncidentView {
     /// about then may be older.
     #[serde(default)]
     pub observed_since: Option<Timestamp>,
+    /// The workload it is about, when it is one's.
+    #[serde(default)]
+    pub workload: Option<Box<WorkloadSummary>>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -102,6 +105,20 @@ pub struct WorkloadSummary {
     pub image: Option<String>,
     #[serde(default)]
     pub links: BTreeMap<String, String>,
+    #[serde(default)]
+    pub restart_policy: Option<String>,
+    /// Published ports, as Docker writes them (`0.0.0.0:8080->80/tcp`).
+    #[serde(default)]
+    pub ports: Vec<String>,
+    #[serde(default)]
+    pub memory_used_bytes: Option<u64>,
+    #[serde(default)]
+    pub memory_limit_bytes: Option<u64>,
+    #[serde(default)]
+    pub restarts_last_hour: u32,
+    /// The last healthcheck's output while it fails.
+    #[serde(default)]
+    pub health_output: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -125,6 +142,9 @@ pub struct HostView {
     /// The applications on the host.
     #[serde(default)]
     pub apps: Vec<AppSummary>,
+    /// The address the host reports from, as the server sees it.
+    #[serde(default)]
+    pub ip: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -154,6 +174,23 @@ pub struct HostOverview {
     pub apps: u32,
     #[serde(default)]
     pub apps_in_trouble: u32,
+    #[serde(default)]
+    pub os: Option<String>,
+    #[serde(default)]
+    pub kernel: Option<String>,
+    #[serde(default)]
+    pub arch: Option<String>,
+    #[serde(default)]
+    pub cpu_count: Option<u32>,
+    #[serde(default)]
+    pub boot_time: Option<Timestamp>,
+    #[serde(default)]
+    pub docker_version: Option<String>,
+    #[serde(default)]
+    pub agent_version: Option<String>,
+    /// The address the host reports from, as the server sees it.
+    #[serde(default)]
+    pub ip: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -163,6 +200,14 @@ pub struct DiskUse {
     /// `DISK_FILLING` is open for it.
     #[serde(default)]
     pub filling: bool,
+    #[serde(default)]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub free_bytes: u64,
+    #[serde(default)]
+    pub inodes_percent: u8,
+    #[serde(default)]
+    pub fs_type: Option<String>,
 }
 
 /// A URL the server probes. `Unknown` until its first probe.
@@ -250,6 +295,24 @@ pub struct AppSummary {
     pub incidents: Vec<IncidentView>,
     #[serde(default)]
     pub links: BTreeMap<String, String>,
+    /// Its workloads, those with problems first.
+    #[serde(default)]
+    pub workloads: Vec<WorkloadSummary>,
+    /// Its latest deployments, newest first.
+    #[serde(default)]
+    pub deploys: Vec<Deploy>,
+    /// Application-class exceptions in the last hour.
+    #[serde(default)]
+    pub exceptions_1h: u32,
+}
+
+/// A new image for one of an application's workloads.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct Deploy {
+    pub ts: Timestamp,
+    pub service: String,
+    pub from: String,
+    pub to: String,
 }
 
 /// `GET /api/apps`.
@@ -368,5 +431,18 @@ pub fn workload_summary(
         state_since: state.state_since,
         links,
         key,
+        restart_policy: facts.and_then(|f| f.restart_policy.clone()),
+        ports: facts.map(|f| f.ports.clone()).unwrap_or_default(),
+        memory_used_bytes: state.memory_used_bytes,
+        memory_limit_bytes: facts.and_then(|f| f.memory_limit_bytes),
+        restarts_last_hour: state.restarts.len() as u32,
+        // A stopped container keeps its last check's output: it says nothing now.
+        health_output: state
+            .health_output
+            .as_ref()
+            .filter(|_| {
+                state.run == RunState::Running && state.health_failing_streak.is_some_and(|n| n > 0)
+            })
+            .map(|o| o.split_whitespace().collect::<Vec<_>>().join(" ")),
     }
 }

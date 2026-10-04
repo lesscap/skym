@@ -1,15 +1,18 @@
 //! One read of what the views draw on, so every response attributes and dates its
 //! problems the same way.
 
-use super::views::{self, Context, incident_view};
+use super::apps::History;
+use super::views::{self, Context, incident_view, links};
 use super::{ApiError, AppState, apps};
 use crate::lifecycle::Incident;
 use crate::store::hosts::{HostRow, WorkloadRow};
 use crate::store::probes::ProbeRow;
 use crate::store::{history, hosts, incidents, probes};
-use jiff::Timestamp;
-use skym_core::subject::{HostId, WorkloadKey};
-use skym_core::view::{AppSummary, EndpointOverview, IncidentView};
+use jiff::{SignedDuration, Timestamp};
+use skym_core::subject::{HostId, Subject, WorkloadKey};
+use skym_core::view::{
+    AppSummary, EndpointOverview, IncidentView, WorkloadSummary, workload_summary,
+};
 use std::collections::BTreeMap;
 
 /// Generous bound on rows read for one response; lists are cut to `limit` afterwards.
@@ -21,7 +24,7 @@ pub struct Snapshot {
     /// Open incidents, muted ones included (mutes live in the configuration).
     pub open: Vec<Incident>,
     probes: BTreeMap<String, ProbeRow>,
-    deployed: BTreeMap<WorkloadKey, Timestamp>,
+    history: History,
     stopped: BTreeMap<WorkloadKey, Timestamp>,
     hosts_seen: BTreeMap<HostId, Timestamp>,
     urls_seen: BTreeMap<String, Timestamp>,
@@ -30,15 +33,24 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub async fn read(s: &AppState) -> Result<Snapshot, ApiError> {
-        let (hosts, workloads, probes, open, deployed) = s
+        let now = Timestamp::now();
+        let (hosts, workloads, probes, open, history) = s
             .store
-            .call(|c| {
+            .call(move |c| {
+                let history = History {
+                    last_deployed: history::last_deployed(c)?,
+                    deploys: history::deploys(c, now - SignedDuration::from_hours(24 * 30))?,
+                    exceptions_1h: history::application_exceptions(
+                        c,
+                        now - SignedDuration::from_hours(1),
+                    )?,
+                };
                 Ok((
                     hosts::all(c)?,
                     hosts::all_workloads(c)?,
                     probes::all(c)?,
                     incidents::listed(c, true, None, None, Timestamp::UNIX_EPOCH, MAX_ROWS)?,
-                    history::last_deployed(c)?,
+                    history,
                 ))
             })
             .await?;
@@ -53,8 +65,8 @@ impl Snapshot {
             hosts,
             workloads,
             open,
-            deployed,
-            now: Timestamp::now(),
+            history,
+            now,
         })
     }
 
@@ -67,7 +79,27 @@ impl Snapshot {
             urls_seen: &self.urls_seen,
             now: self.now,
         };
-        incidents.iter().map(|i| incident_view(i, &cx)).collect()
+        let open: Vec<IncidentView> = self.open.iter().map(|i| incident_view(i, &cx)).collect();
+        // Each workload once, its status from every open incident (whatever was asked for).
+        let workloads: BTreeMap<&WorkloadKey, WorkloadSummary> = self
+            .workloads
+            .iter()
+            .map(|w| {
+                let links = links(&Subject::Workload(w.key.clone()));
+                (&w.key, workload_summary(w.key.clone(), w.facts.as_ref(), &w.state, &open, links))
+            })
+            .collect();
+        // A workload's problem carries the workload, for a reader that looks no further.
+        incidents
+            .iter()
+            .map(|i| {
+                let mut v = incident_view(i, &cx);
+                if let Subject::Workload(k) = &v.subject {
+                    v.workload = workloads.get(k).cloned().map(Box::new);
+                }
+                v
+            })
+            .collect()
     }
 
     /// Every application, most urgent first; `open` are the views of `self.open`.
@@ -80,6 +112,6 @@ impl Snapshot {
                 views::endpoint(e, row, open, s.cfg.report_interval, self.now)
             })
             .collect();
-        apps::summaries(&self.workloads, &s.cfg.apps, &endpoints, open, &self.deployed)
+        apps::summaries(&self.workloads, &s.cfg.apps, &endpoints, open, &self.history)
     }
 }

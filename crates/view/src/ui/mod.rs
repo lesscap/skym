@@ -3,6 +3,7 @@
 mod apps;
 mod host;
 mod hosts;
+mod preview;
 mod problems;
 mod timeline;
 mod workload;
@@ -71,7 +72,7 @@ pub fn draw(f: &mut Frame, app: &App, server: &str, now: Timestamp, theme: Theme
     f.render_widget(top_bar(app, server, now, theme), top);
     match &app.frame().screen {
         Screen::Problems => problems::draw(f, body, app, now, theme),
-        Screen::Hosts => hosts::draw(f, body, app, theme),
+        Screen::Hosts => hosts::draw(f, body, app, now, theme),
         Screen::Host(_) => host::draw(f, body, app, now, theme),
         Screen::Workload(_) => workload::draw(f, body, app, now, theme),
         Screen::Exceptions(h) => workload::exceptions(f, body, app, h, now, theme),
@@ -155,10 +156,10 @@ fn bottom_bar(app: &App, theme: Theme) -> Paragraph<'static> {
     }
     let keys = match &app.frame().screen {
         Screen::Problems => {
-            "↑↓ move  ⏎ open  ⇥ apps  / filter  h hygiene  m muted  r refresh  ? help  q quit"
+            "↑↓ move  ⏎ open  ⇥ apps  / filter  h hygiene  m muted  p preview  ? help  q quit"
         }
-        Screen::Apps => "↑↓ move  ⏎ open  ⇥ hosts  e all environments  / filter  ? help  q quit",
-        Screen::Hosts => "↑↓ move  ⏎ open  ⇥ problems  / filter  r refresh  ? help  q quit",
+        Screen::Apps => "↑↓ move  ⏎ open  ⇥ hosts  e all environments  / filter  p preview  ? help",
+        Screen::Hosts => "↑↓ move  ⏎ open  ⇥ problems  / filter  p preview  ? help  q quit",
         Screen::App(_) => "↑↓ move  ⏎ service  ⇥ next tab  / filter  esc back  ? help",
         Screen::Host(_) => "↑↓ move  ⏎ app  t timeline  e exceptions  / filter  esc back  ? help",
         Screen::Workload(_) => "↑↓ move  ⏎ expand exception  t timeline  esc back  ? help",
@@ -179,6 +180,7 @@ fn help(f: &mut Frame, theme: Theme) {
         "e          exceptions (host); all environments (applications)",
         "[ ]        timeline window: 6h 24h 7d",
         "h          show hygiene (info) problems",
+        "p          preview of the selected row (tabs)",
         "m          show muted problems",
         "r          refresh now (every 30 s anyway)",
         "q          quit",
@@ -193,6 +195,31 @@ fn help(f: &mut Frame, theme: Theme) {
         .title(" help · any key closes ")
         .border_style(theme.dim());
     f.render_widget(Paragraph::new(lines.join("\n")).block(block), area);
+}
+
+/// A tab's list and, when shown, its preview: beside the list from 160 columns, under it
+/// (a third of the height, at least 7 rows) below that.
+fn with_preview(area: Rect, shown: bool) -> (Rect, Option<Rect>) {
+    if !shown {
+        return (area, None);
+    }
+    if area.width >= 160 {
+        let [list, preview] =
+            Layout::horizontal([Constraint::Fill(3), Constraint::Fill(2)]).areas(area);
+        return (list, Some(preview));
+    }
+    let [list, preview] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length((area.height / 3).max(7))])
+            .areas(area);
+    (list, Some(preview))
+}
+
+/// The preview of the selected row in a box named after it; long lines go on under their
+/// text, past the labels.
+fn draw_preview(f: &mut Frame, area: Rect, title: String, lines: Vec<Line<'static>>, theme: Theme) {
+    let width = area.width.saturating_sub(2) as usize;
+    let lines: Vec<Line> = lines.into_iter().flat_map(|l| preview::wrap(l, width)).collect();
+    f.render_widget(Paragraph::new(lines).block(block(title, theme)), area);
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

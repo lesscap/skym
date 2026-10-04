@@ -32,6 +32,7 @@ fn incident(subject: &str, severity: Severity, opened: i64) -> IncidentView {
         mute_reason: None,
         links: BTreeMap::new(),
         observed_since: watched,
+        workload: None,
     }
 }
 

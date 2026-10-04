@@ -37,9 +37,9 @@ token_sha256 = "…"
 | --- | --- | --- |
 | `GET /api` | How do I use this? | Endpoint descriptions |
 | `GET /api/overview` | Where is something wrong right now? | `problems`: every open, unmuted incident, worst and oldest first, each with its application (`app`, else it is its host's own); `hosts`: every host with its status, last report age, load, memory, disks and applications, most urgent first |
-| `GET /api/apps` | Which applications exist, where, and are they up? | Every application (compose project, or lone container or systemd unit) with its name, environment, note, status, services, URLs, last deployment and open incidents; most urgent first |
+| `GET /api/apps` | Which applications exist, where, and are they up? | Every application (compose project, or lone container or systemd unit) with its name, environment, note, status, URLs, open incidents, its `workloads` (image, run state, restart policy, ports, memory against its limit, restarts in the last hour), its latest `deploys` and `exceptions_1h`; most urgent first |
 | `GET /api/apps/{host}/{project}` | What is this application, and how is it? | The application and its workloads; lone containers and systemd units at `/api/apps/{host}/{project}/{service}` |
-| `GET /api/hosts` | Which hosts are there, and how loaded? | The overview's `hosts` |
+| `GET /api/hosts` | Which hosts are there, and how loaded? | The overview's `hosts`: also the system (`os`, `kernel`, `arch`, `cpu_count`, `boot_time`, `docker_version`, `agent_version`), the address it reports from (`ip`) and every disk's size, free space and inodes |
 | `GET /api/hosts/{host}` | What is going on with this host? | Facts, state, its applications, workloads with their status, open incidents |
 | `GET /api/hosts/{host}/workloads/{project}/{service}` | What is going on with this application? | Facts, state, recent exception groups, recent events |
 | `GET /api/timeline` | When did it start, and what else happened? | Incident changes and events, merged and sorted by time |
@@ -59,7 +59,7 @@ Every incident says what it belongs to, which is where to look next:
 | `endpoint:`, `app:` | its application | the application (`links.app`) |
 | `host:`, `mount:` | none: the host's own | the host (`links.host`) |
 
-`observed_since` on an incident is when skym started watching its subject (its host, or its URL's first probe): an incident opened about then may be older.
+An incident about a workload carries that workload's summary (`workload`: image, ports, memory, restarts, a failing healthcheck's output), so a reader can explain it without another call. `observed_since` on an incident is when skym started watching its subject (its host, or its URL's first probe): an incident opened about then may be older.
 
 ### Parameters
 

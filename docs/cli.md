@@ -74,7 +74,7 @@ token_file = "/etc/skym/token"       # mode 0600, kept out of the configuration
 state_dir = "/var/lib/skym"          # undelivered reports and log cursors
 ```
 
-`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` are honored. Public IP addresses are never reported.
+`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` are honored. Public IP addresses are never reported (the server sees where a report comes from).
 
 ### `agent`
 

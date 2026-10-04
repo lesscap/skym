@@ -172,6 +172,14 @@ async fn an_incident_from_reports_to_overview_workload_and_timeline() {
         (Some("WORKLOAD_DOWN"), Some("critical"), Some("x/captain"))
     );
     assert_eq!(incident["links"]["app"], "/api/apps/x/captain");
+    let w = &incident["workload"];
+    assert_eq!(
+        w["key"]["service"], "api",
+        "the workload it is about, for a reader that looks no further"
+    );
+    assert!(w["ports"].is_array(), "{w}");
+    assert_eq!(w["image"], "registry.example.com/captain:1.4.2", "that workload's own facts");
+    assert_eq!(w["status"], "critical", "its status from every open incident");
     assert!(incident["observed_since"].is_string(), "since when skym watches its host");
     assert_eq!(overview["status"], "critical");
     let hosts = get(&app, "/api/hosts").await;
@@ -504,4 +512,59 @@ async fn applications_are_listed_described_and_missed() {
     assert_eq!(lone["app"]["name"], "xray");
     let (status, _) = call(&app, "GET", "/api/apps/x/nothing", Some(READER_TOKEN), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn applications_count_their_recent_deploys_and_errors() {
+    let (app, _) = app();
+    let image = |r: &mut Report, tag: &str| {
+        r.workloads[0].facts.as_mut().unwrap().image =
+            format!("registry.example.com/captain:{tag}");
+    };
+    for (mins_ago, tag) in [(5 * 24 * 60, "1"), (4 * 24 * 60, "1.9")] {
+        let mut r = report(mins_ago);
+        r.exceptions.clear();
+        image(&mut r, tag);
+        assert_eq!(post(&app, &r).await, StatusCode::OK);
+    }
+    let failures = |r: &Report, count: u32| skym_core::model::ExceptionGroup {
+        workload: r.workloads[0].key.clone(),
+        class: skym_core::model::ExceptionClass::Application,
+        component: "jobs".into(),
+        code: "TIMEOUT".into(),
+        count,
+        final_count: 0,
+        first_seen: r.ts,
+        last_seen: r.ts,
+        biz_keys: vec![],
+        sample: None,
+    };
+    let mut redeployed = report(120); // within the 30-day window, outside the hour
+    redeployed.workloads[0].facts.as_mut().unwrap().image = "registry.example.com/captain:2".into();
+    redeployed.exceptions = vec![failures(&redeployed, 40)];
+    assert_eq!(post(&app, &redeployed).await, StatusCode::OK);
+    let mut recent = report(1);
+    recent.workloads[0].facts.as_mut().unwrap().image = "registry.example.com/captain:2".into();
+    recent.exceptions = vec![failures(&recent, 3)];
+    assert_eq!(post(&app, &recent).await, StatusCode::OK);
+    let apps = get(&app, "/api/apps").await;
+    let captain =
+        apps["apps"].as_array().unwrap().iter().find(|a| a["key"] == "x/captain").unwrap();
+    let deploys: Vec<&str> =
+        captain["deploys"].as_array().unwrap().iter().map(|d| d["to"].as_str().unwrap()).collect();
+    assert_eq!(
+        deploys,
+        ["registry.example.com/captain:2", "registry.example.com/captain:1.9"],
+        "newest first, four days back included"
+    );
+    let in_hour: u64 = recent
+        .exceptions
+        .iter()
+        .filter(|g| {
+            g.class == skym_core::model::ExceptionClass::Application
+                && g.workload.project == "captain"
+        })
+        .map(|g| g.count as u64)
+        .sum();
+    assert_eq!(captain["exceptions_1h"].as_u64(), Some(in_hour), "the last hour's reports only");
 }

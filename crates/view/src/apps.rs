@@ -70,6 +70,9 @@ mod tests {
             endpoints: vec![],
             incidents: vec![],
             links: BTreeMap::new(),
+            workloads: vec![],
+            deploys: vec![],
+            exceptions_1h: 0,
         }
     }
 

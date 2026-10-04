@@ -1,5 +1,5 @@
 use super::*;
-use skym_core::model::WorkloadState;
+use skym_core::model::{EventKind, WorkloadState};
 use skym_core::rules::{IncidentCode, Severity};
 use skym_core::view::Status;
 
@@ -29,6 +29,7 @@ fn incident(subject: &str, code: IncidentCode, severity: Severity) -> IncidentVi
         links: BTreeMap::new(),
         app: None,
         observed_since: None,
+        workload: None,
     }
 }
 
@@ -71,7 +72,8 @@ fn workloads_group_into_projects_and_lone_ones() {
         (rows[1].key.clone(), at(30)),
         (rows[5].key.clone(), at(99)),
     ]);
-    let apps = summaries(&rows, &[], &[], &[], &deployed);
+    let apps =
+        summaries(&rows, &[], &[], &[], &History { last_deployed: deployed, ..History::default() });
     let keys: Vec<String> = apps.iter().map(|a| a.key.to_string()).collect();
     assert_eq!(keys, ["x/-/redis", "x/_systemd/xray", "x/shop", "y/shop"]);
     let shop = &apps[2];
@@ -115,7 +117,7 @@ fn incidents_and_probes_belong_to_their_app_and_rank_it() {
     let probes = [probe("https://shop.example.com/", "x/shop")];
     let config =
         [configured("x/shop", Some("Shop")), configured("x/gone", None), configured("x/new", None)];
-    let apps = summaries(&rows, &config, &probes, &open, &BTreeMap::new());
+    let apps = summaries(&rows, &config, &probes, &open, &History::default());
     let ranked: Vec<(&str, Status, usize)> =
         apps.iter().map(|a| (a.name.as_str(), a.status, a.incidents.len())).collect();
     let subjects =
@@ -150,7 +152,7 @@ fn a_silent_host_takes_its_apps_with_it() {
         incident("host:x", IncidentCode::HeartbeatLost, Severity::Critical),
         incident("host:y", IncidentCode::OomKilled, Severity::Warn),
     ];
-    let apps = summaries(&rows, &[], &[], &open, &BTreeMap::new());
+    let apps = summaries(&rows, &[], &[], &open, &History::default());
     let status: Vec<(&str, Status)> = apps.iter().map(|a| (a.name.as_str(), a.status)).collect();
     assert_eq!(
         status,
@@ -165,12 +167,49 @@ fn an_external_app_is_known_by_its_urls() {
     partner.probes = vec![];
     let answering =
         EndpointOverview { status: Status::Ok, ..probe("https://p.example/", "external/partner") };
-    let apps = summaries(&[], std::slice::from_ref(&partner), &[answering], &[], &BTreeMap::new());
+    let apps =
+        summaries(&[], std::slice::from_ref(&partner), &[answering], &[], &History::default());
     assert_eq!((apps[0].status, apps[0].services), (Status::Ok, 0), "no services, yet fine");
     let unprobed = EndpointOverview {
         status: Status::Unknown,
         ..probe("https://p.example/", "external/partner")
     };
-    let apps = summaries(&[], &[partner], &[unprobed], &[], &BTreeMap::new());
+    let apps = summaries(&[], &[partner], &[unprobed], &[], &History::default());
     assert_eq!(apps[0].status, Status::Unknown, "not probed yet");
+}
+
+#[test]
+fn an_app_lists_its_workloads_deploys_and_recent_exceptions() {
+    let rows = [
+        row("workload:x/shop/web", RunState::Running),
+        row("workload:x/shop/api", RunState::Exited),
+        row("workload:x/blog/web", RunState::Running),
+    ];
+    let open = [incident("workload:x/shop/api", IncidentCode::WorkloadDown, Severity::Critical)];
+    let deploy = |min: i64, service: &str, to: &str| Event {
+        ts: at(min),
+        subject: format!("workload:x/{service}").parse().unwrap(),
+        kind: EventKind::Deployed { from: "1".into(), to: to.into() },
+    };
+    let mut deploys: Vec<Event> =
+        (0..12).rev().map(|m| deploy(m, "shop/web", &m.to_string())).collect();
+    deploys.insert(0, deploy(99, "blog/web", "b"));
+    let history = History {
+        deploys,
+        exceptions_1h: BTreeMap::from([
+            (rows[0].key.clone(), 3),
+            (rows[1].key.clone(), 4),
+            (rows[2].key.clone(), 50),
+        ]),
+        ..History::default()
+    };
+    let apps = summaries(&rows, &[], &[], &open, &history);
+    let shop = apps.iter().find(|a| a.name == "shop").unwrap();
+    let names: Vec<&str> = shop.workloads.iter().map(|w| w.key.service.as_str()).collect();
+    assert_eq!(names, ["api", "web"], "problems first");
+    assert_eq!(shop.workloads[0].status, Status::Critical);
+    assert_eq!(shop.exceptions_1h, 7, "its own workloads' only");
+    assert_eq!(shop.deploys.len(), 10, "the latest ten");
+    assert_eq!((shop.deploys[0].service.as_str(), shop.deploys[0].to.as_str()), ("web", "11"));
+    assert!(shop.deploys.iter().all(|d| d.service == "web"), "not another app's");
 }

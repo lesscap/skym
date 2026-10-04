@@ -147,6 +147,7 @@ impl App {
             Key::Char('r') => return self.refresh(now),
             Key::Char('/') => (self.filter, self.editing) = (Some(String::new()), true),
             Key::Char('h') => self.show_info = !self.show_info,
+            Key::Char('p') => self.preview = !self.preview,
             Key::Char('m') => {
                 self.show_muted = !self.show_muted;
                 if self.show_muted {

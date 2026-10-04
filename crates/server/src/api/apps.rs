@@ -1,14 +1,28 @@
 //! Applications: workloads grouped by application, described by the configuration. Pure.
 
-use super::views::status;
+use super::views::{links, status};
 use crate::config::AppConfig;
 use crate::store::hosts::WorkloadRow;
 use jiff::Timestamp;
-use skym_core::model::RunState;
+use skym_core::model::{Event, EventKind, RunState};
 use skym_core::rules::IncidentCode;
 use skym_core::subject::{AppKey, Subject, WorkloadKey, encode};
-use skym_core::view::{AppSummary, EndpointOverview, IncidentView, Status};
+use skym_core::view::{
+    AppSummary, Deploy, EndpointOverview, IncidentView, Status, WorkloadSummary, workload_summary,
+};
 use std::collections::BTreeMap;
+
+/// What happened to workloads lately: when each was last deployed, recent deployments
+/// (newest first) and application exceptions in the last hour.
+#[derive(Default)]
+pub struct History {
+    pub last_deployed: BTreeMap<WorkloadKey, Timestamp>,
+    pub deploys: Vec<Event>,
+    pub exceptions_1h: BTreeMap<WorkloadKey, u32>,
+}
+
+/// How many deployments an application lists.
+const DEPLOYS: usize = 10;
 
 /// Every application: those with workloads, and configured ones without any. Most urgent
 /// first. `open` holds open incidents, muted ones are left out here; `endpoints` are the
@@ -18,7 +32,7 @@ pub fn summaries(
     configured: &[AppConfig],
     endpoints: &[EndpointOverview],
     open: &[IncidentView],
-    deployed: &BTreeMap<WorkloadKey, Timestamp>,
+    history: &History,
 ) -> Vec<AppSummary> {
     let mut keys: BTreeMap<AppKey, Vec<&WorkloadRow>> = BTreeMap::new();
     for w in workloads {
@@ -31,7 +45,7 @@ pub fn summaries(
         .into_iter()
         .map(|(key, rows)| {
             let config = configured.iter().find(|a| a.id == key);
-            summary(key, &rows, config, endpoints, open, deployed)
+            summary(key, &rows, config, endpoints, open, history)
         })
         .collect();
     apps.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.key.cmp(&b.key)));
@@ -44,7 +58,7 @@ fn summary(
     config: Option<&AppConfig>,
     endpoints: &[EndpointOverview],
     open: &[IncidentView],
-    deployed: &BTreeMap<WorkloadKey, Timestamp>,
+    history: &History,
 ) -> AppSummary {
     let endpoints: Vec<EndpointOverview> =
         endpoints.iter().filter(|e| e.app.as_ref() == Some(&key)).cloned().collect();
@@ -64,7 +78,25 @@ fn summary(
         ),
         services: rows.len() as u32,
         running: rows.iter().filter(|w| w.state.run == RunState::Running).count() as u32,
-        last_deployed: rows.iter().filter_map(|w| deployed.get(&w.key)).max().copied(),
+        last_deployed: rows.iter().filter_map(|w| history.last_deployed.get(&w.key)).max().copied(),
+        workloads: workload_summaries(rows, &incidents),
+        deploys: history
+            .deploys
+            .iter()
+            .filter_map(|e| match (&e.subject, &e.kind) {
+                (Subject::Workload(k), EventKind::Deployed { from, to }) if key.contains(k) => {
+                    Some(Deploy {
+                        ts: e.ts,
+                        service: k.service.clone(),
+                        from: from.clone(),
+                        to: to.clone(),
+                    })
+                }
+                _ => None,
+            })
+            .take(DEPLOYS)
+            .collect(),
+        exceptions_1h: rows.iter().filter_map(|w| history.exceptions_1h.get(&w.key)).sum(),
         endpoints,
         incidents,
         links: BTreeMap::from([
@@ -73,6 +105,19 @@ fn summary(
         ]),
         key,
     }
+}
+
+/// Its workloads with their own status, those with problems first.
+fn workload_summaries(rows: &[&WorkloadRow], incidents: &[IncidentView]) -> Vec<WorkloadSummary> {
+    let mut list: Vec<WorkloadSummary> = rows
+        .iter()
+        .map(|w| {
+            let links = links(&Subject::Workload(w.key.clone()));
+            workload_summary(w.key.clone(), w.facts.as_ref(), &w.state, incidents, links)
+        })
+        .collect();
+    list.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.key.cmp(&b.key)));
+    list
 }
 
 /// An incident of the app's workloads, of the app itself, of one of its probes, or its

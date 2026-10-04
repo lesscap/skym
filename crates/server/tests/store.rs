@@ -37,7 +37,7 @@ fn send_with(
     r: &Report,
     now: Timestamp,
 ) -> Result<Outcome, IngestError> {
-    ingest(c, "x", apps, &serde_json::to_vec(r).unwrap(), now)
+    ingest(c, "x", None, apps, &serde_json::to_vec(r).unwrap(), now)
 }
 
 fn open_codes(c: &Connection) -> Vec<(String, IncidentCode)> {
@@ -419,4 +419,43 @@ fn an_external_app_is_never_missing() {
         send_with(&mut c, &apps, &listed(report(at(m))), at(m)).unwrap();
     }
     assert!(missing(&c).is_empty(), "it runs on no host skym watches");
+}
+
+#[test]
+fn a_host_keeps_its_last_known_address() {
+    let mut c = db::open_in_memory().unwrap();
+    let body = |m| serde_json::to_vec(&report(t0() + mins(m))).unwrap();
+    ingest(&mut c, "x", Some("203.0.113.7"), &[], &body(0), t0()).unwrap();
+    ingest(&mut c, "x", None, &[], &body(1), t0() + mins(1)).unwrap();
+    assert_eq!(hosts::get(&c, "x").unwrap().unwrap().remote_addr.as_deref(), Some("203.0.113.7"));
+    ingest(&mut c, "x", Some("203.0.113.8"), &[], &body(2), t0() + mins(2)).unwrap();
+    assert_eq!(hosts::get(&c, "x").unwrap().unwrap().remote_addr.as_deref(), Some("203.0.113.8"));
+}
+
+#[test]
+fn recent_deployments_and_application_exceptions_are_read_by_time() {
+    let mut c = db::open_in_memory().unwrap();
+    let mut first = report(t0());
+    first.exceptions = skym_core::fixtures::full_report().exceptions; // business ones
+    first.exceptions.push(failures(&first, 7));
+    send(&mut c, &first, t0()).unwrap();
+    let mut second = report(t0() + mins(60));
+    second.workloads[0].facts.as_mut().unwrap().image = "registry.example.com/captain:9".into();
+    send(&mut c, &second, t0() + mins(60)).unwrap();
+    let deploys = history::deploys(&c, t0() + mins(30)).unwrap();
+    assert_eq!(deploys.len(), 1);
+    assert!(history::deploys(&c, t0() + mins(61)).unwrap().is_empty(), "older ones are left out");
+    let counted = history::application_exceptions(&c, t0()).unwrap();
+    let expected: u32 = first
+        .exceptions
+        .iter()
+        .filter(|g| g.class == ExceptionClass::Application)
+        .map(|g| g.count)
+        .sum();
+    assert!(expected > 0, "the fixture has application exceptions");
+    assert_eq!(counted.values().sum::<u32>(), expected, "business ones are not counted");
+    assert!(
+        history::application_exceptions(&c, t0() + mins(1)).unwrap().is_empty(),
+        "by report time"
+    );
 }
