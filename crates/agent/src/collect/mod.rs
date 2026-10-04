@@ -66,6 +66,8 @@ pub struct Collected {
     pub log_ends: BTreeMap<WorkloadKey, Timestamp>,
     /// The kernel's `oom_kill` counter (`/proc/vmstat`), when readable.
     pub oom_kill_count: Option<u64>,
+    /// CPU and network counters, for rates against the previous pass.
+    pub counters: host::Counters,
     /// systemd's `NRestarts` per unit.
     pub unit_restart_counts: BTreeMap<WorkloadKey, u32>,
     /// Docker's events were read up to `Window::now`.
@@ -93,6 +95,10 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window<'_>) -> Collected {
         Some((d, _)) => note(&mut errors, "docker", from_docker(d, cfg, host, w).await),
         None => None,
     };
+    // Informational only: a failure here must not make the server treat the host's
+    // subjects as unobserved, so it is logged, not reported.
+    let (counters, warnings) = host::counters();
+    warnings.iter().for_each(|w| eprintln!("warning: {w}"));
     let oom_kill_count =
         std::fs::read_to_string("/proc/vmstat").ok().and_then(|s| host::oom_kills(&s));
     let (units, unit_errors) = systemd::collect(host, &cfg.systemd).await;
@@ -116,6 +122,7 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window<'_>) -> Collected {
         all_failed: outcomes.iter().flatten().all(|ok| !ok),
         log_ends: out.log_ends,
         oom_kill_count,
+        counters,
         unit_restart_counts,
         events_read: out.events_read,
         workloads_complete: !cfg.docker.enabled || out.complete,

@@ -86,7 +86,7 @@ systemctl daemon-reload && systemctl enable --now skym
 journalctl -u skym -f
 ```
 
-The unit runs `skym agent` as the `skym` user with read-only access to the system, at low CPU and I/O priority, capped at 20% of one CPU and 256 MB. See [`deploy/skym.service`](../deploy/skym.service).
+The unit runs `skym agent` as the `skym` user with read-only access to the system, at low CPU and I/O priority, capped at 20% of one CPU and 256 MB, and restarted at most once a minute. See [`deploy/skym.service`](../deploy/skym.service).
 
 Membership in the `docker` group is effectively root access; see the [security model](architecture.md#security-model).
 

@@ -266,6 +266,16 @@ fn a_host_overview_shows_its_resources_and_which_disk_fills_up() {
     assert_eq!(h.load_1m, Some(r.state.load_1m));
     assert_eq!(h.memory_used_bytes, Some(r.state.memory_used_bytes));
     assert_eq!(h.memory_total_bytes, r.facts.as_ref().map(|f| f.memory_total_bytes));
+    let s = &r.state;
+    assert_eq!(
+        (h.cpu_percent, h.iowait_percent, h.steal_percent),
+        (s.cpu_percent, s.iowait_percent, s.steal_percent)
+    );
+    assert_eq!(
+        (h.net_rx_bytes_per_s, h.net_tx_bytes_per_s),
+        (s.net_rx_bytes_per_s, s.net_tx_bytes_per_s)
+    );
+    assert!(h.cpu_percent.is_some() && h.net_tx_bytes_per_s.is_some(), "from the full report");
     let percent = |part: u64, whole: u64| (part * 100 / whole) as u8;
     assert_eq!(
         h.disks[0],
@@ -310,6 +320,7 @@ fn a_host_overview_shows_its_resources_and_which_disk_fills_up() {
     let tags = ["cn".to_string(), "acme".to_string(), "cn".to_string()];
     let silent = host_overview(&"y".to_string(), &tags, None, &[], &[], at(5));
     assert_eq!((silent.status, silent.disks.len(), silent.load_1m), (Status::Unknown, 0, None));
+    assert_eq!((silent.cpu_percent, silent.net_rx_bytes_per_s), (None, None));
     assert_eq!(silent.tags, ["acme", "cn"], "sorted, once each, even before it reports");
 }
 

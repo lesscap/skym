@@ -39,7 +39,7 @@ token_sha256 = "…"
 | `GET /api/overview` | Where is something wrong right now? | `problems`: every open, unmuted incident, worst and oldest first, each with its application (`app`, else it is its host's own); `hosts`: every host with its status, last report age, load, memory, disks and applications, most urgent first |
 | `GET /api/apps` | Which applications exist, where, and are they up? | Every application (compose project, or lone container or systemd unit) with its name, environment, note, status, URLs, open incidents, its `workloads` (image, run state, restart policy, ports, memory against its limit, restarts in the last hour), its latest `deploys`, `exceptions_1h` and `tags` (its host's and its own); most urgent first |
 | `GET /api/apps/{host}/{project}` | What is this application, and how is it? | The application and its workloads; lone containers and systemd units at `/api/apps/{host}/{project}/{service}` |
-| `GET /api/hosts` | Which hosts are there, and how loaded? | The overview's `hosts`: also the system (`os`, `kernel`, `arch`, `cpu_count`, `boot_time`, `docker_version`, `agent_version`), the address it reports from (`ip`), its `tags` and every disk's size, free space and inodes |
+| `GET /api/hosts` | Which hosts are there, and how loaded? | The overview's `hosts`: also the system (`os`, `kernel`, `arch`, `cpu_count`, `boot_time`, `docker_version`, `agent_version`), the address it reports from (`ip`), its `tags`, how busy its CPUs were (`cpu_percent`, `iowait_percent`, `steal_percent`: shares of all CPUs since the previous report), its network traffic (`net_rx_bytes_per_s`, `net_tx_bytes_per_s`, physical interfaces only) and every disk's size, free space and inodes |
 | `GET /api/hosts/{host}` | What is going on with this host? | Facts, state, its applications, workloads with their status, open incidents |
 | `GET /api/hosts/{host}/workloads/{project}/{service}` | What is going on with this application? | Facts, state, recent exception groups, recent events |
 | `GET /api/timeline` | When did it start, and what else happened? | Incident changes and events, merged and sorted by time |
@@ -119,6 +119,10 @@ An incident about a workload carries that workload's summary (`workload`: image,
       "last_report_ago": "40s",
       "observed_since": "2026-09-01T08:00:00Z",
       "load_1m": 1.3,
+      "cpu_percent": 23.4,
+      "iowait_percent": 4.0,
+      "net_rx_bytes_per_s": 1200000,
+      "net_tx_bytes_per_s": 310000,
       "memory_used_bytes": 9800000000,
       "memory_total_bytes": 31000000000,
       "disks": [

@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
         Constraint::Length(15),
         Constraint::Length(7),
         Constraint::Length(7),
-        Constraint::Length(4),
+        Constraint::Length(10), // `128 · 100%` fits
         Constraint::Length(6),
         Constraint::Length(15),
         Constraint::Fill(1),
@@ -68,7 +68,7 @@ fn host_row(h: &HostOverview, worst: Option<Status>, now: Timestamp, theme: Them
         Cell::from(h.ip.clone().unwrap_or_default()),
         right(h.last_report_ago.clone().unwrap_or("never".into())),
         right(h.boot_time.map_or(String::new(), |t| ago(now, t))),
-        right(h.cpu_count.map_or(String::new(), |n| n.to_string())),
+        right(cpu(h)),
         right(h.load_1m.map_or(String::new(), |l| format!("{l:.2}"))),
         Cell::from(
             h.memory_used_bytes
@@ -77,6 +77,13 @@ fn host_row(h: &HostOverview, worst: Option<Status>, now: Timestamp, theme: Them
         Cell::from(Line::from(disks(&h.disks, theme))),
         Cell::from(Line::from([vec![Span::raw(h.apps.to_string())], trouble].concat())),
     ])
+}
+
+/// `4 · 23%`: CPUs and how busy they were since the previous report.
+fn cpu(h: &HostOverview) -> String {
+    let busy = h.cpu_percent.map(|p| format!("{p:.0}%"));
+    let parts: Vec<String> = h.cpu_count.map(|n| n.to_string()).into_iter().chain(busy).collect();
+    parts.join(" · ")
 }
 
 /// `/ 61% of 40G  /data 44% of 80G ▲`: yellow from 85%, `▲` while one fills up.

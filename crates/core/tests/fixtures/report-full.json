@@ -29,7 +29,12 @@
         "inodes_used": 600000
       }
     ],
-    "transient_containers": { "running": 1, "exited": 3 }
+    "transient_containers": { "running": 1, "exited": 3 },
+    "cpu_percent": 23.5,
+    "iowait_percent": 4.0,
+    "steal_percent": 0.0,
+    "net_rx_bytes_per_s": 1200000,
+    "net_tx_bytes_per_s": 310000
   },
   "workloads": [
     {

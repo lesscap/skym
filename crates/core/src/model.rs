@@ -40,6 +40,22 @@ pub struct HostState {
     pub mounts: Vec<MountState>,
     #[serde(default)]
     pub transient_containers: TransientCounts,
+    /// Since the previous pass, as a share of all CPUs (0–100): user, nice, system, irq and
+    /// softirq. `None` on the first pass after a start, after a reboot, or across a long gap.
+    #[serde(default)]
+    pub cpu_percent: Option<f32>,
+    #[serde(default)]
+    pub iowait_percent: Option<f32>,
+    /// Time a virtual machine waited for its hypervisor.
+    #[serde(default)]
+    pub steal_percent: Option<f32>,
+    /// Since the previous pass, at the physical interfaces: traffic is counted once, where it
+    /// enters or leaves the host (not on bonds, bridges or container interfaces, nor traffic
+    /// that stays on the host).
+    #[serde(default)]
+    pub net_rx_bytes_per_s: Option<u64>,
+    #[serde(default)]
+    pub net_tx_bytes_per_s: Option<u64>,
 }
 
 /// Sizes live in state, not facts, so every report can be judged on its own.

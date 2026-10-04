@@ -1,5 +1,6 @@
 use super::*;
 use crate::collect::Workload;
+use skym_core::model::HostState;
 
 fn t(sec: i64) -> Timestamp {
     Timestamp::from_second(1_790_000_000 + sec).unwrap()
@@ -122,4 +123,56 @@ fn systemd_restarts_are_counted_from_the_second_reading() {
     let mut reset = unit(1);
     m.remember(&mut reset, t(220));
     assert_eq!(reset.workloads[0].state.restarts.len(), 3, "a reset counter adds none");
+}
+
+/// A pass with the host's state and these counters: CPU busy and idle jiffies and eth0's
+/// received bytes, read at `at` centiseconds of uptime.
+fn reading(at: u64, cpu: Option<(u64, u64)>, rx: Option<u64>) -> Collected {
+    use crate::collect::host::CpuTimes;
+    let report = skym_core::fixtures::full_report();
+    let state = HostState { cpu_percent: None, net_rx_bytes_per_s: None, ..report.host_state };
+    let counters = Counters {
+        cpu: cpu.map(|(busy, idle)| (at, CpuTimes { busy, idle, iowait: 0, steal: 0 })),
+        net: rx.map(|rx| (at, [("eth0".to_string(), (rx, 0))].into())),
+    };
+    Collected { host: Some((report.host_facts.unwrap(), state)), counters, ..pass(vec![]) }
+}
+
+fn rates(c: &Collected) -> (Option<f32>, Option<u64>) {
+    let state = &c.host.as_ref().unwrap().1;
+    (state.cpu_percent, state.net_rx_bytes_per_s)
+}
+
+#[test]
+fn rates_come_from_the_previous_reading() {
+    let mut m = Memory::default();
+    let mut first = reading(10_000, Some((100, 100)), Some(1_000));
+    m.remember(&mut first, t(0));
+    assert_eq!(rates(&first), (None, None), "nothing to compare with yet");
+    let mut second = reading(16_000, Some((150, 150)), Some(61_000));
+    m.remember(&mut second, t(60));
+    assert_eq!(rates(&second), (Some(50.0), Some(1_000)));
+
+    // A pass without host state still keeps its readings; one that failed a reading keeps
+    // the previous, so the next rate spans both intervals.
+    let mut hostless = Collected { host: None, ..reading(22_000, Some((250, 250)), None) };
+    m.remember(&mut hostless, t(120));
+    let mut third = reading(28_000, Some((250, 350)), Some(181_000));
+    m.remember(&mut third, t(180));
+    assert_eq!(rates(&third), (Some(0.0), Some(1_000)), "net over 120 s since 16_000");
+
+    let mut rebooted = reading(500, Some((10, 10)), Some(10));
+    m.remember(&mut rebooted, t(240));
+    assert_eq!(rates(&rebooted), (None, None), "uptime went back: a reboot");
+    let mut after = reading(6_500, Some((40, 40)), Some(60_010));
+    m.remember(&mut after, t(300));
+    assert_eq!(rates(&after), (Some(50.0), Some(1_000)), "from the reboot's reading on");
+}
+
+#[test]
+fn a_one_off_pass_measures_from_given_counters() {
+    let before = reading(10_000, Some((100, 100)), Some(0)).counters;
+    let mut pass = reading(10_100, Some((110, 110)), Some(500));
+    Memory::starting_from(before).rates(&mut pass);
+    assert_eq!(rates(&pass), (Some(50.0), Some(500)));
 }

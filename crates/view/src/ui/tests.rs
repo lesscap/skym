@@ -63,6 +63,11 @@ fn host(id: &str, status: Status, disks: Vec<DiskUse>) -> HostOverview {
         docker_version: None,
         agent_version: None,
         ip: None,
+        cpu_percent: None,
+        iowait_percent: None,
+        steal_percent: None,
+        net_rx_bytes_per_s: None,
+        net_tx_bytes_per_s: None,
         tags: vec![],
     }
 }
@@ -249,8 +254,13 @@ fn the_hosts_tab_shows_load_disks_and_apps() {
     let apps = AppList { apps: vec![warn("x/a"), warn("x/b")] };
     update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(apps)))), t(120));
     app.stack = vec![Frame { screen: Screen::Hosts, cursor: 0, expanded: None }];
-    let lines = render(&app, Theme { color: false }, 110, 12);
+    let hosts = &mut app.overview.value.as_mut().unwrap().hosts;
+    (hosts[0].cpu_count, hosts[0].cpu_percent) = (Some(4), Some(23.4));
+    hosts[1].cpu_count = Some(2);
+    let lines = render(&app, Theme { color: false }, 120, 12);
     assert!(lines[line_of(&lines, " x ")].contains("(3 !)"), "marked by the worst app in trouble");
+    assert!(lines[line_of(&lines, " x ")].contains(" 4 · 23% "), "CPUs and how busy");
+    assert!(lines[line_of(&lines, " yi1 ")].contains(" 2 "), "no rate yet: the CPUs alone");
     let x = &lines[line_of(&lines, " x ")];
     assert!(x.contains("1.30") && x.contains("9.8 / 31.0 GB"), "{x}");
     assert!(x.contains("/data 44% ▲") && x.contains("23"), "{x}");
@@ -621,6 +631,17 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
     line_of(&lines, "7 application exceptions in the last hour");
     app.stack = vec![Frame { screen: Screen::Hosts, cursor: 0, expanded: None }];
     let lines = render(&app, Theme { color: false }, 120, 30);
+    assert!(lines[line_of(&lines, " cpu ")].contains("load 1.30   memory"), "no rates yet");
+    assert!(!lines.iter().any(|l| l.contains(" net ")), "nor a network line");
+    let x = &mut app.overview.value.as_mut().unwrap().hosts[0];
+    (x.cpu_percent, x.iowait_percent, x.steal_percent) = (Some(23.4), Some(4.0), Some(0.4));
+    (x.net_rx_bytes_per_s, x.net_tx_bytes_per_s) = (Some(1_200_000), Some(540));
+    let lines = render(&app, Theme { color: false }, 120, 36);
+    assert!(
+        lines[line_of(&lines, " cpu ")].contains("23% busy · 4% iowait · load 1.30   memory"),
+        "steal under 1% is left out"
+    );
+    line_of(&lines, " net      ↓ 1.2MB/s  ↑ 540B/s");
     assert!(
         lines[line_of(&lines, "top mem")].contains("Shop 3.1G · a1 1.0G · a2 500M · 2 others 300M"),
         "the three largest, then the rest"
