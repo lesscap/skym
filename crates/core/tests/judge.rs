@@ -340,6 +340,70 @@ fn unhealthy_workload_while_running_with_what_the_check_said() {
     assert!(unhealthy(&r).is_none(), "a stopped workload is down, not unhealthy");
 }
 
+#[test]
+fn a_healthcheck_that_cannot_run_is_hygiene_not_unhealthy() {
+    let judged = |r: &Report| {
+        let found = findings(r, &Ctx::default());
+        let pick = |code| found.iter().find(|f| f.code == code).cloned();
+        (pick(IncidentCode::HealthcheckBroken), pick(IncidentCode::WorkloadUnhealthy))
+    };
+    let mut r = base();
+    let state = &mut r.workloads[APP].state;
+    state.health = Some(Health::Unhealthy);
+    state.health_failing_streak = Some(299_588);
+    // As production reported it.
+    state.health_output = Some(
+        "OCI runtime exec failed: exec failed: unable to start container process: exec: \"wget\": \
+         executable file not found in $PATH: unknown"
+            .into(),
+    );
+    let (broken, unhealthy) = judged(&r);
+    let broken = broken.expect("broken");
+    assert_eq!(
+        (broken.severity, broken.detail.as_str()),
+        (
+            Severity::Info,
+            "the healthcheck cannot run (299588 checks), so health is unknown: exec: \"wget\": \
+             executable file not found in $PATH: unknown"
+        )
+    );
+    assert!(unhealthy.is_none(), "not both");
+    // crun's wording, without a streak.
+    let state = &mut r.workloads[APP].state;
+    (state.health_failing_streak, state.health_output) = (
+        None,
+        Some(
+            "OCI runtime exec failed: executable file `wget` not found in $PATH: No such file \
+             or directory"
+                .into(),
+        ),
+    );
+    assert_eq!(
+        judged(&r).0.unwrap().detail,
+        "the healthcheck cannot run, so health is unknown: executable file `wget` not found in \
+         $PATH: No such file or directory"
+    );
+    r.workloads[APP].state.health_output =
+        Some("OCI runtime exec failed: exec: \"curl\": permission denied".into());
+    assert!(judged(&r).0.is_some(), "a check that cannot be executed is broken");
+    r.workloads[APP].state.health_output = Some(
+        "OCI runtime exec failed: exec failed: unable to start container process: error \
+         executing setns process: exit status 1"
+            .into(),
+    );
+    assert!(
+        matches!(judged(&r), (None, Some(_))),
+        "a check that cannot start for the workload's sake (out of pids, memory) is unhealthy"
+    );
+    r.workloads[APP].state.health_output = Some("/bin/sh: wget: not found".into());
+    assert!(
+        matches!(judged(&r), (None, Some(_))),
+        "a check that ran and failed (a shell's not found too) is still unhealthy"
+    );
+    r.workloads[APP].state.run = RunState::Exited;
+    assert_eq!(judged(&r), (None, None), "a stopped workload is down, not either");
+}
+
 fn incident(subject: Subject, severity: Severity, muted: bool) -> IncidentView {
     IncidentView {
         subject,

@@ -173,6 +173,7 @@ now − host.last_seen > 3 × report_interval ⇒ open Incident { subject: host,
 | `HEARTBEAT_LOST` | Host | No report within the timeout |
 | `WORKLOAD_DOWN` | Workload | Should be running but is not; `Exited (0)` is not a failure |
 | `WORKLOAD_UNHEALTHY` | Workload | Docker healthcheck reports unhealthy |
+| `HEALTHCHECK_BROKEN` | Workload | Docker healthcheck cannot start: a missing binary, a bad path or no permission to execute (hygiene) |
 | `CRASH_LOOP` | Workload | Restart count grows faster than a threshold |
 | `OOM_KILLED` | Host or Workload | Kernel OOM kill |
 | `DISK_FILLING` | Mount | A mount is nearly full, or projected to fill up soon |
