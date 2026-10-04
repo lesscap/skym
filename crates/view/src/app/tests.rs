@@ -1,5 +1,5 @@
 use super::*;
-use crate::apps::Grouping;
+use crate::apps::{Grouping, Sort};
 use skym_core::rules::{IncidentCode, Severity};
 use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{AppSummary, HostOverview, IncidentView, Status, WorkloadSummary};
@@ -224,10 +224,25 @@ fn a_host_lists_its_apps_and_an_app_its_services() {
     fetched(&mut app, Request::Host("x".into()), Payload::Host(host_view()), t(3));
     assert_eq!(press(&mut app, &[Key::Char('e')]), [Request::Exceptions("x".into())]);
     press(&mut app, &[Key::Esc]);
-    let apps: Vec<String> = app.host_apps().iter().map(|a| a.name.clone()).collect();
-    assert_eq!(apps, ["zz", "app"], "in the server's order: problems first");
+    let apps = |app: &App| app.host_apps().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+    assert_eq!(apps(&app), ["zz", "app"], "in the server's order: problems first");
+    let using: WorkloadSummary = serde_json::from_value(serde_json::json!({
+        "key": { "host": "x", "project": "app", "service": "web" },
+        "status": "ok", "run": "running", "memory_used_bytes": 1_000_000
+    }))
+    .unwrap();
+    app.host.value.as_mut().unwrap().apps[1].workloads = vec![using];
+    press(&mut app, &[Key::Down, Key::Char('s')]);
+    assert_eq!(app.frame().cursor, 0, "the selection follows its application");
+    assert_eq!((apps(&app), app.sort), (vec!["app".to_string(), "zz".to_string()], Sort::Memory));
+    press(&mut app, &[Key::Char('s')]);
+    assert_eq!(
+        (apps(&app), app.frame().cursor),
+        (vec!["zz".to_string(), "app".to_string()], 1),
+        "and back"
+    );
     let zz: AppKey = "x/zz".parse().unwrap();
-    assert_eq!(press(&mut app, &[Key::Enter]), [Request::App(zz.clone())]);
+    assert_eq!(press(&mut app, &[Key::Up, Key::Enter]), [Request::App(zz.clone())]);
     fetched(&mut app, Request::App(zz), Payload::App(app_view("x/zz")), t(3));
     let services: Vec<String> = app.services().iter().map(|w| w.key.service.clone()).collect();
     assert_eq!(services, ["api", "web"], "problems first");
@@ -355,14 +370,27 @@ fn app_rows(app: &App) -> Vec<String> {
 #[test]
 fn the_applications_tab_groups_folds_and_leads_to_an_app() {
     let mut app = loaded();
-    press(&mut app, &[Key::Char('g')]);
-    assert_eq!(app.grouping, Grouping::Env, "only the applications tab groups");
+    press(&mut app, &[Key::Char('g'), Key::Char('s')]);
+    assert_eq!(
+        (app.grouping, app.sort),
+        (Grouping::Env, Sort::Problems),
+        "only the applications tab groups, and it or a host's page sorts"
+    );
     let mut shop = summary("y/shop", Some("prod"), Status::Ok);
     shop.tags = vec!["acme".into()];
     let list = AppList {
         apps: vec![
             shop,
-            summary("y/shop-test", Some("test"), Status::Ok),
+            AppSummary {
+                workloads: vec![
+                    serde_json::from_value(serde_json::json!({
+                        "key": { "host": "y", "project": "shop-test", "service": "web" },
+                        "status": "ok", "run": "running", "memory_used_bytes": 1_000_000
+                    }))
+                    .unwrap(),
+                ],
+                ..summary("y/shop-test", Some("test"), Status::Ok)
+            },
             summary("x/blog", Some("test"), Status::Critical),
         ],
     };
@@ -373,6 +401,11 @@ fn the_applications_tab_groups_folds_and_leads_to_an_app() {
     assert_eq!(app_rows(&app), ["[prod]", "shop", "[test]", "blog"]);
     press(&mut app, &[Key::Char('e')]);
     assert_eq!(app_rows(&app), ["[prod]", "shop", "[test]", "blog", "shop-test"]);
+    press(&mut app, &[Key::Down, Key::Down, Key::Down, Key::Char('s')]);
+    assert_eq!(app_rows(&app), ["[prod]", "shop", "[test]", "shop-test", "blog"]);
+    assert_eq!(app.frame().cursor, 4, "still on blog");
+    press(&mut app, &[Key::Up, Key::Up, Key::Char('s')]);
+    assert_eq!(app.frame().cursor, 2, "a header stays put");
     press(&mut app, &[Key::Char('e')]);
     assert_eq!(app_rows(&app), ["[prod]", "[test]", "blog"], "all open, so all folded");
     press(&mut app, &[Key::Down, Key::Char('g')]);

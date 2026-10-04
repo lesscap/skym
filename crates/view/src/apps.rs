@@ -46,6 +46,19 @@ impl Grouping {
     }
 }
 
+/// How applications are ordered: worst first, or by the memory they use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    #[default]
+    Problems,
+    Memory,
+}
+
+/// The memory its workloads report, if any does.
+pub fn used_memory(a: &AppSummary) -> Option<u64> {
+    a.workloads.iter().filter_map(|w| w.memory_used_bytes).reduce(|x, y| x + y)
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Group<'a> {
     pub name: String,
@@ -63,6 +76,11 @@ impl<'a> Group<'a> {
     pub fn worst(&self) -> Status {
         self.all.iter().map(|a| a.status).max().unwrap_or(Status::Ok)
     }
+
+    /// The memory all of its applications report, folded ones included.
+    pub fn memory(&self) -> Option<u64> {
+        self.all.iter().copied().filter_map(used_memory).reduce(|x, y| x + y)
+    }
 }
 
 /// The groups of the applications `keep` keeps, in order: environments the usual ones first
@@ -71,6 +89,7 @@ impl<'a> Group<'a> {
 pub fn groups<'a>(
     apps: &'a [AppSummary],
     by: Grouping,
+    sort: Sort,
     open: &BTreeSet<(Grouping, String)>,
     keep: impl Fn(&AppSummary) -> bool,
 ) -> Vec<Group<'a>> {
@@ -83,7 +102,13 @@ pub fn groups<'a>(
     let mut groups: Vec<Group> = named
         .into_iter()
         .map(|(name, mut all)| {
-            all.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.name.cmp(&b.name)));
+            all.sort_by(|a, b| {
+                let first = match sort {
+                    Sort::Problems => b.status.cmp(&a.status),
+                    Sort::Memory => used_memory(b).cmp(&used_memory(a)),
+                };
+                first.then_with(|| a.name.cmp(&b.name))
+            });
             let open = open.contains(&(by, name.clone()));
             Group { name, all, open }
         })
@@ -167,7 +192,7 @@ mod tests {
         ];
         let none = BTreeSet::new();
         assert_eq!(
-            shown(&groups(&apps, Grouping::Env, &none, |_| true)),
+            shown(&groups(&apps, Grouping::Env, Sort::Problems, &none, |_| true)),
             pairs(&[
                 ("prod", &["blog"]),
                 ("pre", &["shop-pre"]),
@@ -181,10 +206,11 @@ mod tests {
         );
         let open =
             BTreeSet::from([(Grouping::Env, "prod".to_string()), (Grouping::Host, "test".into())]);
-        let prod = groups(&apps, Grouping::Env, &open, |_| true);
+        let prod = groups(&apps, Grouping::Env, Sort::Problems, &open, |_| true);
         assert_eq!(shown(&prod[..1]), pairs(&[("prod", &["blog", "shop"])]), "worst first");
         assert!(!prod[2].open, "another grouping's open group of the same name stays its own");
-        let filtered = groups(&apps, Grouping::Env, &none, |a| a.name.starts_with("shop"));
+        let filtered =
+            groups(&apps, Grouping::Env, Sort::Problems, &none, |a| a.name.starts_with("shop"));
         assert_eq!(filtered.len(), 3, "groups with nothing kept are left out");
         assert_eq!(filtered[0].all.len(), 1);
     }
@@ -198,20 +224,66 @@ mod tests {
             on("c", "db", Status::Critical, &[]),
         ];
         let all = |by| {
-            let g = groups(&apps, by, &BTreeSet::new(), |_| true);
+            let g = groups(&apps, by, Sort::Problems, &BTreeSet::new(), |_| true);
             g.iter().map(|g| (g.name.clone(), g.worst())).collect::<Vec<_>>()
         };
         let names = |by| all(by).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
         assert_eq!(names(Grouping::Host), ["c", "b", "a", "external"]);
         assert_eq!(all(Grouping::Host)[1], ("b".into(), Status::Warn));
         assert_eq!(names(Grouping::Tag), ["acme", "beta", "untagged"]);
-        let by_tag = groups(&apps, Grouping::Tag, &BTreeSet::new(), |_| true);
+        let by_tag = groups(&apps, Grouping::Tag, Sort::Problems, &BTreeSet::new(), |_| true);
         assert_eq!(by_tag[0].all.len(), 2, "an app with two tags is in both groups");
         assert_eq!(Grouping::Env.next().next().next(), Grouping::Env);
         assert_eq!(
             [Grouping::Env, Grouping::Host, Grouping::Tag].map(Grouping::label),
             ["environment", "host", "tag"]
         );
+    }
+
+    /// An application whose workloads report these amounts of memory (`None`: not reported).
+    fn using(name: &str, status: Status, memory: &[Option<u64>]) -> AppSummary {
+        let workload = |m: &Option<u64>| {
+            serde_json::from_value(serde_json::json!({
+                "key": { "host": "x", "project": name, "service": "s" },
+                "status": "ok", "run": "running", "memory_used_bytes": m
+            }))
+            .unwrap()
+        };
+        AppSummary {
+            workloads: memory.iter().map(workload).collect(),
+            ..app(name, Some("prod"), status)
+        }
+    }
+
+    #[test]
+    fn memory_is_summed_and_orders_groups_when_asked() {
+        let apps = [
+            using("big", Status::Ok, &[Some(300), None, Some(200)]),
+            using("none", Status::Critical, &[None]),
+            using("bare", Status::Ok, &[]),
+            using("small", Status::Warn, &[Some(100)]),
+            using("also", Status::Ok, &[Some(100)]),
+        ];
+        assert_eq!(
+            apps.iter().map(used_memory).collect::<Vec<_>>(),
+            [Some(500), None, None, Some(100), Some(100)]
+        );
+        let open = BTreeSet::from([(Grouping::Env, "prod".to_string())]);
+        let order = |sort| {
+            let g = groups(&apps, Grouping::Env, sort, &open, |_| true);
+            (g[0].all.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), g[0].memory())
+        };
+        assert_eq!(
+            order(Sort::Problems),
+            (vec!["none", "small", "also", "bare", "big"], Some(700))
+        );
+        assert_eq!(
+            order(Sort::Memory).0,
+            ["big", "also", "small", "bare", "none"],
+            "most first, ties by name, none reported last"
+        );
+        let silent = groups(&apps[1..3], Grouping::Env, Sort::Memory, &open, |_| true);
+        assert_eq!(silent[0].memory(), None);
     }
 
     #[test]

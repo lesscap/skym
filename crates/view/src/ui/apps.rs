@@ -1,9 +1,9 @@
 //! Every application, grouped by environment; and one application with its URLs and services.
 
-use super::preview::usage;
+use super::preview::{size, usage};
 use super::{Theme, ago, block, draw_preview, empty_row, preview, problem_table, with_preview};
 use crate::app::{App, AppRow};
-use crate::apps::{Group, Grouping};
+use crate::apps::{Group, Grouping, Sort, used_memory};
 use crate::names;
 use jiff::Timestamp;
 use ratatui::Frame;
@@ -35,26 +35,29 @@ pub fn list(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
         .iter()
         .map(|r| match r {
             AppRow::Group(g) => group_row(g, app.grouping, theme),
-            AppRow::App(a) => app_row(a, a.key.host.clone(), now, theme),
+            AppRow::App(a) => app_row(a, a.key.host.clone(), host_memory(app, a), now, theme),
         })
         .collect();
     if rows.is_empty() {
         rows.push(empty_row(1, "(none)".into(), theme));
     }
-    let title = format!(" Applications ({}) · by {} ", all.apps.len(), app.grouping.label());
+    let title = format!(
+        " Applications ({}) · by {}{} ",
+        all.apps.len(),
+        app.grouping.label(),
+        if app.sort == Sort::Memory { " · most memory first" } else { "" }
+    );
     let selected = (!listed.is_empty()).then_some(app.frame().cursor);
     let mut state = TableState::default().with_selected(selected);
     let table = Table::new(rows, APP_COLUMNS)
-        .header(
-            Row::new(["", "APP", "HOST", "SVC", "UP", "URL", "ERR 1H", "DEPLOYED"])
-                .style(theme.dim()),
-        )
+        .header(app_header("HOST", app, theme))
         .block(block(title, theme))
         .row_highlight_style(theme.selected(true));
     f.render_stateful_widget(table, area, &mut state);
 }
 
-/// `✗ ▸ PROD  43 apps`: its worst status, folded or open, and how many it has.
+/// `✗ ▸ PROD  43 apps  9.1G`: its worst status, folded or open, how many it has and the
+/// memory they use.
 fn group_row(g: &Group, by: Grouping, theme: Theme) -> Row<'static> {
     let worst = match g.worst() {
         Status::Ok => Span::raw(""),
@@ -68,16 +71,19 @@ fn group_row(g: &Group, by: Grouping, theme: Theme) -> Row<'static> {
             format!("{mark} {name}"),
             Style::new().add_modifier(Modifier::BOLD),
         )),
-        Cell::from(Line::styled(preview::apps(g.all.len()), theme.dim())),
+        Cell::from(Line::styled(preview::app_count(g.all.len()), theme.dim())),
+        Cell::from(""),
+        Cell::from(Line::from(g.memory().map_or(String::new(), size)).right_aligned()),
     ])
 }
 
-/// Status, name, host or environment, services, up for, first URL, errors, deployed.
-const APP_COLUMNS: [Constraint; 8] = [
+/// Status, name, host or environment, services, memory, up for, first URL, errors, deployed.
+const APP_COLUMNS: [Constraint; 9] = [
     Constraint::Length(3),
     Constraint::Length(22),
     Constraint::Length(9), // `external` fits
     Constraint::Length(5),
+    Constraint::Length(9), // `999M 100%` fits
     Constraint::Length(7),
     Constraint::Fill(1),
     Constraint::Length(6),
@@ -85,8 +91,15 @@ const APP_COLUMNS: [Constraint; 8] = [
 ];
 
 /// One application's line: `second` is where it runs (in the list) or its environment (on a
-/// host). Then its first URL and how it answers, else what is wrong with it.
-fn app_row(a: &AppSummary, second: String, now: Timestamp, theme: Theme) -> Row<'static> {
+/// host). Its memory, with its share of `host_memory`. Then its first URL and how it
+/// answers, else what is wrong with it.
+fn app_row(
+    a: &AppSummary,
+    second: String,
+    host_memory: Option<u64>,
+    now: Timestamp,
+    theme: Theme,
+) -> Row<'static> {
     let url = match (a.endpoints.first(), a.incidents.first()) {
         (Some(e), _) => endpoint_text(e, a.endpoints.len()),
         (None, Some(i)) => super::reason(&i.detail),
@@ -98,6 +111,7 @@ fn app_row(a: &AppSummary, second: String, now: Timestamp, theme: Theme) -> Row<
         Cell::from(a.name.clone()),
         Cell::from(second),
         Cell::from(format!("{}/{}", a.running, a.services)),
+        Cell::from(Line::from(mem_cell(a, host_memory)).right_aligned()),
         Cell::from(Line::from(up(a, now)).right_aligned()),
         Cell::from(url),
         Cell::from(
@@ -112,6 +126,27 @@ fn app_row(a: &AppSummary, second: String, now: Timestamp, theme: Theme) -> Row<
     .style(if a.status == Status::Ok && a.services == 0 { theme.dim() } else { Style::new() })
 }
 
+/// The columns' names: `second` is HOST or ENV; `MEM ▼` while sorted by memory.
+fn app_header(second: &'static str, app: &App, theme: Theme) -> Row<'static> {
+    let mem = if app.sort == Sort::Memory { "MEM ▼" } else { "MEM" };
+    Row::new(["", "APP", second, "SVC", mem, "UP", "URL", "ERR 1H", "DEPLOYED"]).style(theme.dim())
+}
+
+/// `2.3G 14%` of its host's memory, `2.3G` without the host's total, `—` without any.
+fn mem_cell(a: &AppSummary, host_memory: Option<u64>) -> String {
+    let Some(used) = used_memory(a) else { return "—".into() };
+    match host_memory.filter(|t| *t > 0) {
+        Some(total) => format!("{} {}%", size(used), used * 100 / total),
+        None => size(used),
+    }
+}
+
+/// The total memory of the host an application runs on, as the overview has it.
+fn host_memory(app: &App, a: &AppSummary) -> Option<u64> {
+    let hosts = app.overview.value.iter().flat_map(|o| &o.hosts);
+    hosts.filter(|h| h.id == a.key.host).find_map(|h| h.memory_total_bytes)
+}
+
 /// How long its longest-running workload has been running.
 fn up(a: &AppSummary, now: Timestamp) -> String {
     let running = a.workloads.iter().filter(|w| w.run == RunState::Running);
@@ -121,19 +156,22 @@ fn up(a: &AppSummary, now: Timestamp) -> String {
 /// A host's applications, problems first.
 pub(super) fn host_apps(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) {
     let apps = app.host_apps();
-    let mut rows: Vec<Row> =
-        apps.iter().map(|a| app_row(a, a.env.clone().unwrap_or_default(), now, theme)).collect();
+    let mut rows: Vec<Row> = apps
+        .iter()
+        .map(|a| {
+            let env = a.env.clone().unwrap_or_default();
+            app_row(a, env, host_memory(app, a), now, theme)
+        })
+        .collect();
     if rows.is_empty() {
         rows.push(empty_row(1, "(none)".into(), theme));
     }
     let widths = APP_COLUMNS;
-    let title = format!(" Apps ({}) · problems first ", apps.len());
+    let order = if app.sort == Sort::Memory { "most memory first" } else { "problems first" };
+    let title = format!(" Apps ({}) · {order} ", apps.len());
     let mut state = TableState::default().with_selected(Some(app.frame().cursor));
     let table = Table::new(rows, widths)
-        .header(
-            Row::new(["", "APP", "ENV", "SVC", "UP", "URL", "ERR 1H", "DEPLOYED"])
-                .style(theme.dim()),
-        )
+        .header(app_header("ENV", app, theme))
         .block(block(title, theme))
         .row_highlight_style(theme.selected(true));
     f.render_stateful_widget(table, area, &mut state);

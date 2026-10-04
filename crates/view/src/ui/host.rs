@@ -1,7 +1,7 @@
 //! One host: what it is, how it is doing, its problems and its services.
 
 use super::apps::host_apps;
-use super::{Theme, local, preview, problem_table};
+use super::{Theme, hygiene_folded, local, preview, problem_table, shown};
 use crate::app::App;
 use crate::names::short;
 use jiff::Timestamp;
@@ -17,8 +17,8 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
     let Some(h) = &app.host.value else {
         return f.render_widget(Paragraph::new(" loading…"), area);
     };
-    let head = header(app, h, now, theme);
-    // The host's own problems: its applications' are on them.
+    let mut head = header(app, h, now, theme);
+    // The host's own problems: its applications' are on them. With none to list, a line.
     let own: Vec<IncidentView> = h
         .incidents
         .iter()
@@ -26,14 +26,28 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
         .cloned()
         .collect();
     let (problems, height) = problem_table(app, &own, now, |i| short(&i.subject), theme);
+    let listed = own.iter().any(|i| shown(app, i));
+    if !listed {
+        let hygiene = match hygiene_folded(app, &own) {
+            0 => String::new(),
+            n => format!(" · {n} hygiene items (h)"),
+        };
+        head.push(Line::from(vec![
+            preview::label("problems", theme),
+            Span::raw(format!("none{hygiene}")),
+        ]));
+    }
+    let height = if listed { height.min((area.height / 3).max(3)) } else { 0 };
     let [head_area, problems_area, apps] = Layout::vertical([
         Constraint::Length(head.len() as u16),
-        Constraint::Length(height.min((area.height / 3).max(3))),
+        Constraint::Length(height),
         Constraint::Min(3),
     ])
     .areas(area);
     f.render_widget(Paragraph::new(head), head_area);
-    f.render_widget(problems, problems_area);
+    if listed {
+        f.render_widget(problems, problems_area);
+    }
     host_apps(f, apps, app, now, theme);
 }
 

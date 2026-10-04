@@ -2,8 +2,9 @@
 
 use super::{App, AppRow, Data, Frame, Key, Screen, TABS, WINDOWS};
 use crate::api::Request;
+use crate::apps::Sort;
 use jiff::Timestamp;
-use skym_core::subject::Subject;
+use skym_core::subject::{AppKey, Subject};
 
 impl App {
     fn open(&mut self, screen: Screen) -> Vec<Request> {
@@ -57,6 +58,35 @@ impl App {
             Screen::Timeline { .. } => None,
         };
         target.map_or_else(Vec::new, |screen| self.open(screen))
+    }
+
+    /// The application on each row of the applications tab or a host's page (`None`: a
+    /// group's header).
+    fn app_keys(&self) -> Vec<Option<AppKey>> {
+        match self.frame().screen {
+            Screen::Apps => self
+                .app_rows()
+                .into_iter()
+                .map(|r| match r {
+                    AppRow::App(a) => Some(a.key.clone()),
+                    AppRow::Group(_) => None,
+                })
+                .collect(),
+            _ => self.host_apps().iter().map(|a| Some(a.key.clone())).collect(),
+        }
+    }
+
+    /// Sorts the other way, the selection staying on its application (a header stays put).
+    fn toggle_sort(&mut self) {
+        let selected = self.app_keys().get(self.frame().cursor).cloned().flatten();
+        self.sort = match self.sort {
+            Sort::Problems => Sort::Memory,
+            Sort::Memory => Sort::Problems,
+        };
+        let at = selected.and_then(|k| self.app_keys().iter().position(|r| r.as_ref() == Some(&k)));
+        if let Some(at) = at {
+            self.frame_mut().cursor = at;
+        }
     }
 
     /// Opens every group of the current grouping, or folds them all when all are open.
@@ -177,6 +207,9 @@ impl App {
             Key::Char('/') => (self.filter, self.editing) = (Some(String::new()), true),
             Key::Char('h') => self.show_info = !self.show_info,
             Key::Char('p') => self.preview = !self.preview,
+            Key::Char('s') if matches!(self.frame().screen, Screen::Apps | Screen::Host(_)) => {
+                self.toggle_sort();
+            }
             Key::Char('m') => {
                 self.show_muted = !self.show_muted;
                 if self.show_muted {

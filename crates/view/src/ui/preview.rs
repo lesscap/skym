@@ -2,7 +2,7 @@
 
 use super::{Theme, ago, local, reason};
 use crate::app::App;
-use crate::apps::{Group, UNCLASSIFIED};
+use crate::apps::{self, Group, UNCLASSIFIED};
 use crate::problems::{Age, Row};
 use jiff::Timestamp;
 use ratatui::style::{Color, Style};
@@ -96,12 +96,32 @@ pub fn usage(used: u64, limit: Option<u64>) -> String {
     limit.map_or_else(|| size(used), |l| format!("{} / {}", size(used), size(l)))
 }
 
-fn label(text: &str, theme: Theme) -> Span<'static> {
+pub fn label(text: &str, theme: Theme) -> Span<'static> {
     Span::styled(format!(" {text:<9}"), theme.dim())
 }
 
+/// `top mem  docker 2.3G · i 1.6G · baton 1.5G · 25 others 3.6G`, when any reports memory.
+fn top_memory(apps: &[&AppSummary], theme: Theme) -> Option<Line<'static>> {
+    let mut using: Vec<(&str, u64)> =
+        apps.iter().filter_map(|a| Some((a.name.as_str(), apps::used_memory(a)?))).collect();
+    using.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let rest = using.split_off(using.len().min(3));
+    let mut parts: Vec<String> =
+        using.iter().map(|(name, bytes)| format!("{name} {}", size(*bytes))).collect();
+    match rest.as_slice() {
+        [] => {}
+        [(name, bytes)] => parts.push(format!("{name} {}", size(*bytes))),
+        _ => {
+            let others: u64 = rest.iter().map(|(_, b)| b).sum();
+            parts.push(format!("{} others {}", rest.len(), size(others)));
+        }
+    }
+    (!parts.is_empty())
+        .then(|| Line::from(vec![label("top mem", theme), Span::raw(parts.join(" · "))]))
+}
+
 /// `1 app`, `43 apps`.
-pub fn apps(n: usize) -> String {
+pub fn app_count(n: usize) -> String {
     if n == 1 { "1 app".into() } else { format!("{n} apps") }
 }
 
@@ -125,7 +145,11 @@ pub fn group(g: &Group, theme: Theme) -> Vec<Line<'static>> {
         names.push(Span::raw(a.name.clone()));
     }
     vec![
-        Line::from(format!(" {} · {trouble} in trouble · {state}", apps(g.all.len()))),
+        Line::from(format!(
+            " {}{} · {trouble} in trouble · {state}",
+            app_count(g.all.len()),
+            g.memory().map_or(String::new(), |m| format!(" · {}", size(m)))
+        )),
         Line::from(names),
     ]
 }
@@ -311,19 +335,16 @@ pub fn host_body(app: &App, h: &HostOverview, now: Timestamp, theme: Theme) -> V
             )),
         ]),
     ];
+    let on_host: Vec<&AppSummary> =
+        app.apps.value.iter().flat_map(|l| &l.apps).filter(|a| a.key.host == h.id).collect();
     lines.extend(tags(&h.tags, theme));
     lines.extend(h.disks.iter().map(|d| disk_line(d, theme)));
-    let troubled: Vec<String> = app
-        .apps
-        .value
-        .iter()
-        .flat_map(|l| &l.apps)
-        .filter(|a| a.key.host == h.id && a.status != Status::Ok)
-        .map(|a| a.name.clone())
-        .collect();
+    let troubled: Vec<String> =
+        on_host.iter().filter(|a| a.status != Status::Ok).map(|a| a.name.clone()).collect();
     if !troubled.is_empty() {
         lines.push(Line::from(vec![label("trouble", theme), Span::raw(troubled.join(", "))]));
     }
+    lines.extend(top_memory(&on_host, theme));
     lines
 }
 

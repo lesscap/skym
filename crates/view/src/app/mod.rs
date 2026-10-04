@@ -2,7 +2,7 @@
 //! requests to make, and `main` makes them.
 
 use crate::api::{FetchError, Payload, Request};
-use crate::apps::Grouping;
+use crate::apps::{Grouping, Sort};
 use jiff::{SignedDuration, Timestamp};
 use skym_core::subject::{AppKey, HostId, WorkloadKey};
 use skym_core::view::{
@@ -123,6 +123,8 @@ pub struct App {
     /// How the applications tab groups them, and which groups are open (of every grouping).
     pub grouping: Grouping,
     pub open_groups: BTreeSet<(Grouping, String)>,
+    /// How the applications tab and a host's applications are ordered.
+    pub sort: Sort,
     pub help: bool,
     /// The last failure; the data stays as it was.
     pub error: Option<FetchError>,
@@ -151,6 +153,7 @@ impl Default for App {
             preview: true,
             grouping: Grouping::default(),
             open_groups: BTreeSet::new(),
+            sort: Sort::default(),
             help: false,
             error: None,
             last_refresh: None,
