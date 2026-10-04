@@ -1,13 +1,14 @@
 //! What the screens list, derived from the data: problems, applications, hosts, services.
 
 use super::{App, Screen};
-use crate::apps::{Group, groups};
+use crate::apps::{Group, Sort, groups, used_memory};
 use crate::filter::Filter;
 use crate::names;
 use crate::problems::{Problems, Row, problems};
 use jiff::Timestamp;
 use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{AppSummary, HostOverview, Status, WorkloadSummary};
+use std::cmp::Reverse;
 
 /// A row of the applications tab.
 #[derive(Debug)]
@@ -73,7 +74,7 @@ impl App {
     pub fn app_rows(&self) -> Vec<AppRow<'_>> {
         let list = self.apps.value.as_ref().map_or(&[][..], |l| l.apps.as_slice());
         let filter = self.filter();
-        let groups = groups(list, self.grouping, &self.open_groups, |a| filter.app(a));
+        let groups = groups(list, self.grouping, self.sort, &self.open_groups, |a| filter.app(a));
         groups
             .into_iter()
             .flat_map(|g| {
@@ -83,11 +84,17 @@ impl App {
             .collect()
     }
 
-    /// A host's applications (the server lists those with problems first), filtered.
+    /// A host's applications, filtered: as the server lists them (problems first), or by
+    /// the memory they use.
     pub fn host_apps(&self) -> Vec<&AppSummary> {
         let filter = self.filter();
         let apps = self.host.value.iter().flat_map(|h| &h.apps);
-        apps.filter(|a| filter.app(a)).collect()
+        let mut list: Vec<&AppSummary> = apps.filter(|a| filter.app(a)).collect();
+        if self.sort == Sort::Memory {
+            // Most first, those reporting none last.
+            list.sort_by_cached_key(|a| Reverse(used_memory(a)));
+        }
+        list
     }
 
     /// An application's services: those with problems first, then by name.

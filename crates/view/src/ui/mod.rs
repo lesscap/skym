@@ -159,11 +159,11 @@ fn bottom_bar(app: &App, theme: Theme) -> Paragraph<'static> {
             "↑↓ move  ⏎ open  ⇥ apps  / filter  h hygiene  m muted  p preview  ? help  q quit"
         }
         Screen::Apps => {
-            "↑↓ move  ⏎ open/fold  ⇥ hosts  g group  e all  / filter  p preview  ? help"
+            "↑↓ move  ⏎ open/fold  ⇥ hosts  g group  e all  s sort  / filter  ? help  q quit"
         }
         Screen::Hosts => "↑↓ move  ⏎ open  ⇥ problems  / filter  p preview  ? help  q quit",
         Screen::App(_) => "↑↓ move  ⏎ service  ⇥ next tab  / filter  esc back  ? help",
-        Screen::Host(_) => "↑↓ move  ⏎ app  t timeline  e exceptions  / filter  esc back  ? help",
+        Screen::Host(_) => "↑↓ move  ⏎ app  s sort  t timeline  e exceptions  esc back  ? help",
         Screen::Workload(_) => "↑↓ move  ⏎ expand exception  t timeline  esc back  ? help",
         Screen::Exceptions(_) => "↑↓ move  ⏎ expand  esc back  ? help",
         Screen::Timeline { .. } => "↑↓ move  [ ] window  esc back  ? help",
@@ -180,6 +180,7 @@ fn help(f: &mut Frame, theme: Theme) {
         "/          filter: words, host:<id> env:<env> tag:<tag> !ok",
         "t          timeline (host, service)",
         "e          exceptions (host); open or fold every group (applications)",
+        "s          sort applications: problems first, or most memory first",
         "g          group applications by environment, host or tag",
         "[ ]        timeline window: 6h 24h 7d",
         "h          show hygiene (info) problems",
@@ -267,6 +268,16 @@ fn event(kind: &skym_core::model::EventKind) -> String {
     }
 }
 
+/// Listed in a problems table: muted and hygiene ones only once asked for.
+fn shown(app: &App, i: &IncidentView) -> bool {
+    (app.show_muted || !i.muted) && (app.show_info || i.severity != Severity::Info)
+}
+
+/// Hygiene items left out until `h`.
+fn hygiene_folded(app: &App, incidents: &[IncidentView]) -> usize {
+    incidents.iter().filter(|i| !app.show_info && i.severity == Severity::Info).count()
+}
+
 /// Problems, worst first, each with how long it has lasted, and the height they take. As
 /// on the overview: muted ones only on `m`, hygiene folded into one line unless `h`.
 /// `name` fills the second column.
@@ -277,13 +288,9 @@ fn problem_table<'a>(
     name: impl Fn(&IncidentView) -> String,
     theme: Theme,
 ) -> (Table<'a>, u16) {
-    let shown = |i: &&IncidentView| {
-        (app.show_muted || !i.muted) && (app.show_info || i.severity != Severity::Info)
-    };
-    let mut listed: Vec<&IncidentView> = incidents.iter().filter(shown).collect();
+    let mut listed: Vec<&IncidentView> = incidents.iter().filter(|i| shown(app, i)).collect();
     listed.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.subject.cmp(&b.subject)));
-    let folded =
-        incidents.iter().filter(|i| !app.show_info && i.severity == Severity::Info).count();
+    let folded = hygiene_folded(app, incidents);
     let mut rows: Vec<Row> = listed
         .into_iter()
         .map(|i| {

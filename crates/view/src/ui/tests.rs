@@ -1,7 +1,7 @@
 use super::*;
 use crate::api::{Payload, Request};
 use crate::app::{Frame, Msg, Screen, update};
-use crate::apps::Grouping;
+use crate::apps::{Grouping, Sort};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use skym_core::rules::IncidentCode;
@@ -304,6 +304,12 @@ fn a_host_shows_its_own_problems_and_its_apps() {
     );
     let apps = line_of(&lines, "Apps (2)");
     assert!(lines[line_of(&lines, " app ")].contains("prod") && line_of(&lines, " blog ") > apps);
+    assert!(!lines.iter().any(|l| l.contains(" problems none")), "listed, so in their box");
+    let calm = app.host.value.as_mut().unwrap();
+    calm.incidents = vec![incident("host:x", IncidentCode::LogUnbounded, Severity::Info, 1)];
+    let lines = render(&app, Theme { color: false }, 100, 20);
+    line_of(&lines, " problems none · 1 hygiene items (h)");
+    assert!(!lines.iter().any(|l| l.contains("┌ Problems")), "no box for nothing to list");
 }
 
 /// A service screen with one exception group, its stack 40 lines long.
@@ -422,9 +428,10 @@ fn the_applications_page_groups_by_environment() {
     let mut app = App { preview: false, open_groups: open, ..App::default() };
     update(&mut app, Msg::Key(crate::app::Key::Tab), t(120));
     update(&mut app, Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(list)))), t(120));
-    let lines = render(&app, Theme { color: false }, 100, 14);
+    let lines = render(&app, Theme { color: false }, 110, 14);
     let shop = line_of(&lines, " shop ");
     assert!(line_of(&lines, "▾ PROD") < shop && shop < line_of(&lines, "▸ TEST"));
+    assert!(lines[line_of(&lines, "MEM")].contains("SVC   MEM"), "after the services");
     assert!(
         lines[shop].contains("shop.example.com  84ms") && lines[shop].ends_with("1h│"),
         "{}",
@@ -522,6 +529,15 @@ fn on_a_wide_terminal_the_preview_sits_beside_the_list() {
     );
 }
 
+/// A workload on x using this much memory.
+fn using(bytes: u64) -> skym_core::view::WorkloadSummary {
+    serde_json::from_value(serde_json::json!({
+        "key": { "host": "x", "project": "p", "service": "s" },
+        "status": "ok", "run": "running", "memory_used_bytes": bytes
+    }))
+    .unwrap()
+}
+
 #[test]
 fn the_apps_and_hosts_tabs_preview_their_selection() {
     let mut a = AppSummary {
@@ -548,6 +564,23 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
         tags: vec!["acme".into(), "eu".into()],
     };
     a.endpoints[0].cert_expires_at = Some(t(60 * 24 * 30));
+    a.workloads = vec![using(3_000_000_000), using(100_000_000)];
+    let small = |name: &str, bytes| AppSummary {
+        key: format!("x/{name}").parse().unwrap(),
+        name: name.into(),
+        status: Status::Ok,
+        workloads: vec![using(bytes)],
+        incidents: vec![],
+        endpoints: vec![],
+        ..a.clone()
+    };
+    let apps = vec![
+        a.clone(),
+        small("a1", 1_000_000_000),
+        small("a2", 500_000_000),
+        small("a3", 200_000_000),
+        small("a4", 100_000_000),
+    ];
     let mut app = App::default();
     update(
         &mut app,
@@ -556,22 +589,42 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
     );
     update(
         &mut app,
-        Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(AppList { apps: vec![a] })))),
+        Msg::Fetched(Request::Apps, Ok(Box::new(Payload::Apps(AppList { apps })))),
         t(120),
     );
     app.stack = vec![Frame { screen: Screen::Apps, cursor: 0, expanded: None }];
     let lines = render(&app, Theme { color: false }, 120, 24);
-    line_of(&lines, "1 app · 1 in trouble · folded to its trouble");
-    assert!(lines[line_of(&lines, " apps ")].contains("! Shop"), "the group's applications");
+    line_of(&lines, "5 apps · 4.9G · 1 in trouble · folded to its trouble");
+    line_of(&lines, "apps     ! Shop · a1 · a2 · a3 · a4");
+    assert!(
+        lines[line_of(&lines, "▸ PROD")].contains("5 apps")
+            && lines[line_of(&lines, "▸ PROD")].contains("4.9G")
+    );
+    assert!(lines[line_of(&lines, " Shop ")].contains("3.1G 10%"), "of x's 31G");
+    app.sort = Sort::Memory;
+    app.open_groups.insert((Grouping::Env, "prod".into()));
+    let lines = render(&app, Theme { color: false }, 120, 24);
+    line_of(&lines, "by environment · most memory first");
+    assert!(lines[line_of(&lines, "MEM ▼")].contains("SVC   MEM ▼"));
+    assert!(
+        line_of(&lines, " Shop ") < line_of(&lines, " a1 ")
+            && line_of(&lines, " a2 ") < line_of(&lines, " a3 ")
+    );
+    app.sort = Sort::Problems;
+    app.open_groups.clear();
     app.stack[0].cursor = 1;
-    let lines = render(&app, Theme { color: false }, 120, 30);
+    let lines = render(&app, Theme { color: false }, 120, 36);
     line_of(&lines, "the web shop");
     assert!(lines[line_of(&lines, " tags ")].contains("acme · eu"));
     assert!(lines[line_of(&lines, "200 in 84ms")].contains("cert until"));
     assert!(lines[line_of(&lines, "web  1.3 → 1.4")].contains("1h ago"));
     line_of(&lines, "7 application exceptions in the last hour");
     app.stack = vec![Frame { screen: Screen::Hosts, cursor: 0, expanded: None }];
-    let lines = render(&app, Theme { color: false }, 120, 24);
+    let lines = render(&app, Theme { color: false }, 120, 30);
+    assert!(
+        lines[line_of(&lines, "top mem")].contains("Shop 3.1G · a1 1.0G · a2 500M · 2 others 300M"),
+        "the three largest, then the rest"
+    );
     let data = &lines[line_of(&lines, "/data ")..];
     assert!(data.iter().any(|l| l.contains("filling up")), "the disk in full, flagged");
 }
