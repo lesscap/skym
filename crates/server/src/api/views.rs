@@ -6,7 +6,7 @@ use crate::store::hosts::{HostRow, WorkloadRow};
 use crate::store::incidents::LogEntry;
 use crate::store::probes::ProbeRow;
 use jiff::{SignedDuration, Timestamp};
-use skym_core::model::{Event, ExceptionGroup};
+use skym_core::model::{Event, ExceptionGroup, RunState};
 use skym_core::rules::{IncidentCode, Severity};
 use skym_core::subject::{AppKey, HostId, Subject, WorkloadKey, encode};
 use skym_core::time::format_duration;
@@ -84,6 +84,33 @@ pub fn app_of(subject: &Subject, probed: &[Endpoint]) -> Option<AppKey> {
 pub fn summary(w: &WorkloadRow, incidents: &[IncidentView]) -> WorkloadSummary {
     let links = links(&Subject::Workload(w.key.clone()));
     workload_summary(w.key.clone(), w.facts.as_ref(), &w.state, incidents, links)
+}
+
+/// The running workloads of these applications that the host's latest report listed: one
+/// gone keeps its last state, and its last readings, until it is archived.
+fn reported<'a>(
+    host: &HostRow,
+    apps: &[&'a AppSummary],
+    rows: &[WorkloadRow],
+) -> Vec<&'a WorkloadSummary> {
+    let listed =
+        |w: &WorkloadSummary| rows.iter().any(|r| r.key == w.key && r.last_seen >= host.last_seen);
+    let workloads = apps.iter().flat_map(|a| &a.workloads);
+    workloads.filter(|w| w.run == RunState::Running && listed(w)).collect()
+}
+
+/// The CPUs a host keeps busy beyond these workloads, never below zero (the readings are
+/// moments apart). One without a reading (its first minute) counts as none.
+fn other_cpu(row: &HostRow, workloads: &[&WorkloadSummary]) -> Option<f32> {
+    let busy = row.state.cpu_percent? / 100.0 * row.facts.as_ref()?.cpu_count as f32;
+    let used: f32 = workloads.iter().filter_map(|w| w.cpu_cores).sum();
+    Some((busy - used).max(0.0))
+}
+
+/// The memory a host uses beyond these workloads, counted as for CPU.
+fn other_memory(row: &HostRow, workloads: &[&WorkloadSummary]) -> u64 {
+    let used: u64 = workloads.iter().filter_map(|w| w.memory_used_bytes).sum();
+    row.state.memory_used_bytes.saturating_sub(used)
 }
 
 /// Where to look next, so an agent never builds URLs itself.
@@ -180,6 +207,7 @@ pub fn host_overview(
     tags: &[String],
     row: Option<&HostRow>,
     apps: &[AppSummary],
+    workloads: &[WorkloadRow],
     open: &[IncidentView],
     now: Timestamp,
 ) -> HostOverview {
@@ -230,6 +258,8 @@ pub fn host_overview(
         steal_percent: row.and_then(|r| r.state.steal_percent),
         net_rx_bytes_per_s: row.and_then(|r| r.state.net_rx_bytes_per_s),
         net_tx_bytes_per_s: row.and_then(|r| r.state.net_tx_bytes_per_s),
+        other_cpu_cores: row.and_then(|r| other_cpu(r, &reported(r, &own, workloads))),
+        other_memory_bytes: row.map(|r| other_memory(r, &reported(r, &own, workloads))),
         disks,
         apps: own.len() as u32,
         apps_in_trouble: own.iter().filter(|a| a.status != Status::Ok).count() as u32,
@@ -251,13 +281,17 @@ pub fn hosts(
     cfg: &ServerConfig,
     rows: &[HostRow],
     apps: &[AppSummary],
+    workloads: &[WorkloadRow],
     open: &[IncidentView],
     now: Timestamp,
 ) -> Vec<HostOverview> {
     let mut hosts: Vec<HostOverview> = cfg
         .hosts
         .iter()
-        .map(|h| host_overview(&h.id, &h.tags, rows.iter().find(|r| r.id == h.id), apps, open, now))
+        .map(|h| {
+            let row = rows.iter().find(|r| r.id == h.id);
+            host_overview(&h.id, &h.tags, row, apps, workloads, open, now)
+        })
         .collect();
     hosts.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.id.cmp(&b.id)));
     hosts
@@ -269,10 +303,11 @@ pub fn overview(
     cfg: &ServerConfig,
     rows: &[HostRow],
     apps: &[AppSummary],
+    workloads: &[WorkloadRow],
     open: &[IncidentView],
     now: Timestamp,
 ) -> Overview {
-    let hosts = hosts(cfg, rows, apps, open, now);
+    let hosts = hosts(cfg, rows, apps, workloads, open, now);
     let mut problems: Vec<IncidentView> = open.iter().filter(|i| !i.muted).cloned().collect();
     problems
         .sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.opened_at.cmp(&b.opened_at)));

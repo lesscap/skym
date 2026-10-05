@@ -590,6 +590,12 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
     );
     let top_cpu = line_of(&lines, "top cpu  Shop 1.20");
     assert!(top_cpu > line_of(&lines, "top mem"), "the first to go when there is no room");
+    assert!(!lines.iter().any(|l| l.contains(" other ")), "not known yet: no line");
+    let x = &mut app.overview.value.as_mut().unwrap().hosts[0];
+    (x.other_cpu_cores, x.other_memory_bytes) = (Some(0.8), Some(1_200_000_000));
+    let lines = render(&app, Theme { color: false }, 120, 40);
+    let other = line_of(&lines, " other    0.80 cores · 1.2G beyond the workloads");
+    assert!(other > line_of(&lines, "top cpu"), "after the largest users");
     let data = &lines[line_of(&lines, "/data ")..];
     assert!(data.iter().any(|l| l.contains("filling up")), "the disk in full, flagged");
 }
