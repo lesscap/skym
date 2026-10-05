@@ -116,4 +116,4 @@ sqlite3 /data/skym.db "DELETE FROM incident_log WHERE incident_id IN
 
 ## AI agents
 
-Give the agent the [skill](../skill/SKILL.md) and a reader token, as `SKYM_URL` and `SKYM_TOKEN` in its environment or in `~/.config/skym/env`.
+Give the agent the [skill](../skills/skym/SKILL.md) and a reader token, as `SKYM_URL` and `SKYM_TOKEN` in its environment or in `~/.config/skym/env`.

@@ -108,12 +108,12 @@ From source; the [installation guide](docs/install.md) has the details.
    skym-view
    ```
 
-   Or give an AI agent the [skill](skill/SKILL.md) and the same two values.
+   Or give an AI agent the [skill](skills/skym/SKILL.md) and the same two values.
 
 ## Documentation
 
 - **Run it:** [installation](docs/install.md), [the `skym` CLI](docs/cli.md)
-- **Read it:** [query API](docs/api.md), [skill for AI agents](skill/SKILL.md)
+- **Read it:** [query API](docs/api.md), [skill for AI agents](skills/skym/SKILL.md)
 - **Report from an application:** [exception protocol](docs/exception-protocol.md)
 - **How it works:** [architecture](docs/architecture.md), [domain model](docs/domain-model.md), [report protocol](docs/report-protocol.md), [judgement rules](docs/judgement.md)
 
