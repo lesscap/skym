@@ -17,6 +17,8 @@ exclude_re = [
     "agent.rs.*(delete ! in|replace - with \\+ in) Agent<'a>::pass",
     # Message wording: the "waiting" count.
     "agent.rs.*replace - with \\+ in Agent<'a>::flush",
+    # Equivalent: a missing state file and an unreadable one both start empty; only the warning differs.
+    "state.rs.*(match guard|replace == with !=).* in load\\b",
     # skym-view's HTTP calls; their paths are tested.
     "view/src/api.rs.*(in|replace) (Client::|install_tls|chain)",
     "systemd.rs.* in collect\\b",
@@ -40,4 +42,6 @@ exclude_globs = [
     # what they show is decided in problems.rs and app.rs, which are tested.
     "crates/view/src/main.rs",
     "crates/view/src/ui/*.rs",
+    # skym-notify's loops, signals and log throttling; each pass is tested against fakes.
+    "crates/notify/src/main.rs",
 ]

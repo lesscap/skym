@@ -14,7 +14,8 @@ every host                                  your own machine
                                             │  query API                   │
                                             └──────────────▲───────────────┘
                                                            │ HTTPS GET (token)
-                                                   AI agent (skill) / skym-view
+                                     AI agent (skill) / skym-view / skym-notify
+                                                                        └──▶ Feishu group, healthchecks.io
 ```
 
 | Component | Runs on | Role |
@@ -23,6 +24,7 @@ every host                                  your own machine
 | `skym-server` | a machine you control | Receives reports, stores the latest state, derives events and incidents, detects lost heartbeats, probes configured URLs, serves the query API. |
 | [skill](../skill/SKILL.md) | the agent's side | A document that tells an AI agent how to call the API and read the results. |
 | `skym-view` | your own machine | A read-only terminal view over the same API. It contains no judgement of its own. |
+| `skym-notify` | beside the server | Another reader of the API. It compares the open incidents with what it already announced and tells a Feishu group what is new, worse or resolved, and pings healthchecks.io while it can read the server. The server knows nothing of it. |
 
 ## Principles
 
@@ -67,7 +69,8 @@ In Rust: no `deny_unknown_fields`, `#[serde(default)]` on non-`Option` fields ad
 | `skym-server` is down | Hosts keep checking locally and buffer reports; buffered reports are replayed in order when the server is back. A report no newer than the last one stored only counts as a heartbeat. |
 | `skym-server` restarts | Lost heartbeats are counted from the later of the last report and the server start, so a restart opens none by itself. |
 | All hosts go silent at once | Each host opens its own `HEARTBEAT_LOST`; when at least 80% of the hosts that have reported (and at least 2) are silent, every one's detail starts with "all hosts silent", pointing at the server side or the network. |
-| The server host itself dies | Planned: the server pings an external dead man's switch (healthchecks.io); missing pings alert through that service. |
+| The server host itself dies | `skym-notify` stops pinging healthchecks.io, which alerts after its grace period; it does the same when it cannot read the server. |
+| Feishu refuses or is unreachable | `skym-notify` keeps what it has not delivered and sends it again every pass; after 10 minutes it pings healthchecks.io's `/fail`. |
 
 ## Application signals
 
@@ -88,7 +91,8 @@ skym/
 │   ├── core/           # protocol types + judgement rules, no I/O
 │   ├── agent/          # bin: skym (CLI + agent)
 │   ├── server/         # bin: skym-server (HTTP API + SQLite)
-│   └── view/           # bin: skym-view (terminal view of the API)
+│   ├── view/           # bin: skym-view (terminal view of the API)
+│   └── notify/         # bin: skym-notify (Feishu messages and healthchecks.io pings, from the API)
 └── docs/
 ```
 
