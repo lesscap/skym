@@ -138,7 +138,7 @@ An incident about a workload carries that workload's summary (`workload`: image,
 }
 ```
 
-`hosts` also carry each host's own open incidents (`incidents`, `info_count`). `customers`, the grouping older views read, is still sent for one version and will be removed; it lists hosts only, not applications' URLs.
+`hosts` also carry each host's own open incidents (`incidents`, `info_count`). The per-customer grouping (`customers`) is gone: hosts and applications carry `tags` instead.
 
 ## Errors
 

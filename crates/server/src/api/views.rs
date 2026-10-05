@@ -11,9 +11,8 @@ use skym_core::rules::{IncidentCode, Severity};
 use skym_core::subject::{AppKey, HostId, Subject, WorkloadKey, encode};
 use skym_core::time::format_duration;
 use skym_core::view::{
-    AppSummary, CustomerOverview, DiskUse, EndpointOverview, HostOverview, HostView, IncidentView,
-    Overview, Status, Timeline, TimelineEntry, TimelineKind, WorkloadSummary, WorkloadView, rollup,
-    workload_summary,
+    AppSummary, DiskUse, EndpointOverview, HostOverview, HostView, IncidentView, Overview, Status,
+    Timeline, TimelineEntry, TimelineKind, WorkloadSummary, WorkloadView, rollup, workload_summary,
 };
 use std::collections::BTreeMap;
 
@@ -149,7 +148,6 @@ pub fn host(
         ip: row.as_ref().and_then(|r| r.remote_addr.clone()),
         state: row.map(|r| r.state),
         id,
-        customer: None, // customers are gone; the field stays for older readers
         workloads,
         incidents,
         apps,
@@ -266,7 +264,7 @@ pub fn hosts(
 }
 
 /// Where something is wrong: every open, unmuted problem, worst and oldest first, and every
-/// host. `customers` groups the hosts for views older than this.
+/// host.
 pub fn overview(
     cfg: &ServerConfig,
     rows: &[HostRow],
@@ -278,32 +276,11 @@ pub fn overview(
     let mut problems: Vec<IncidentView> = open.iter().filter(|i| !i.muted).cloned().collect();
     problems
         .sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.opened_at.cmp(&b.opened_at)));
-    let customers = cfg
-        .customers
-        .iter()
-        .map(|c| {
-            let theirs: Vec<HostOverview> = hosts
-                .iter()
-                .filter(|h| {
-                    cfg.hosts.iter().any(|e| e.id == h.id && e.customer.as_ref() == Some(&c.id))
-                })
-                .cloned()
-                .collect();
-            CustomerOverview {
-                id: c.id.clone(),
-                name: c.name.clone(),
-                status: theirs.iter().map(|h| h.status).max().unwrap_or(Status::Ok),
-                hosts: theirs,
-                endpoints: Vec::new(),
-            }
-        })
-        .collect();
     let worst = hosts.iter().map(|h| h.status).chain(std::iter::once(rollup(&problems)));
     Overview {
         ts: now,
         status: worst.max().unwrap_or(Status::Ok),
         muted_count: open.iter().filter(|i| i.muted).count() as u32,
-        customers,
         problems,
         hosts,
     }

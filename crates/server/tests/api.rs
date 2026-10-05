@@ -37,7 +37,6 @@ fn app_configured(mute: Vec<Mute>, apps: Vec<AppConfig>) -> (Router, AppState) {
         apps,
         hosts: vec![HostEntry {
             id: "x".into(),
-            customer: None,
             token_sha256: sha256_hex(HOST_TOKEN),
             tags: vec!["acme".into()],
         }],

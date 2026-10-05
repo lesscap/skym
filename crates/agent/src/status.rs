@@ -18,7 +18,6 @@ pub fn host_view(report: &Report, mut findings: Vec<Finding>) -> HostView {
         .collect();
     HostView {
         id: report.host.clone(),
-        customer: None,
         status: rollup(&incidents),
         last_report_ago: None,
         observed_since: None,

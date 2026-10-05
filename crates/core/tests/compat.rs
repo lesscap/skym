@@ -331,17 +331,22 @@ fn workloads_belong_to_their_project_or_stand_alone() {
 
 #[test]
 fn an_overview_from_an_older_server_parses() {
+    // Its hosts were grouped under `customers`, which no longer exists.
     let json = r#"{
         "ts": "2026-10-01T00:00:00Z", "status": "warn",
         "customers": [{ "id": "acme", "name": "Acme", "status": "warn", "hosts": [{
-            "id": "x", "status": "warn", "last_report_ago": "5s",
-            "incidents": [{ "subject": "host:x", "code": "OOM_KILLED", "severity": "warn",
-                "detail": "d", "opened_at": null, "open_for": null, "resolved_at": null,
-                "mute_reason": null }] }] }]
+            "id": "x", "status": "warn", "last_report_ago": "5s", "incidents": [] }] }]
     }"#;
     let o: skym_core::view::Overview = serde_json::from_str(json).unwrap();
     assert!(o.problems.is_empty() && o.hosts.is_empty(), "added later, absent before");
-    let host = &o.customers[0].hosts[0];
+    assert_eq!(o.status, skym_core::view::Status::Warn);
+    let host: skym_core::view::HostOverview = serde_json::from_str(
+        r#"{ "id": "x", "status": "warn", "last_report_ago": "5s",
+             "incidents": [{ "subject": "host:x", "code": "OOM_KILLED", "severity": "warn",
+                "detail": "d", "opened_at": null, "open_for": null, "resolved_at": null,
+                "mute_reason": null }] }"#,
+    )
+    .unwrap();
     assert_eq!((host.load_1m, host.disks.len(), host.apps), (None, 0, 0));
     let incident = &host.incidents[0];
     assert_eq!((incident.app.clone(), incident.observed_since), (None, None));

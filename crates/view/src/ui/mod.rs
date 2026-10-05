@@ -105,9 +105,13 @@ fn top_bar(app: &App, server: &str, now: Timestamp, theme: Theme) -> Paragraph<'
         });
     }
     spans.push(Span::raw("    "));
-    // A server older than `problems` and `hosts` would look like a calm fleet: say so.
-    let older =
-        app.overview.value.as_ref().is_some_and(|o| o.hosts.is_empty() && !o.customers.is_empty());
+    // A server older than `problems` and `hosts` sends neither, yet a status they would
+    // explain: it would look like a calm fleet, so say so.
+    let older = app
+        .overview
+        .value
+        .as_ref()
+        .is_some_and(|o| o.hosts.is_empty() && o.problems.is_empty() && o.status != Status::Ok);
     if older {
         spans.push(Span::styled(
             "the server is older than this view: upgrade it   ",
