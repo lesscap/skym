@@ -4,6 +4,7 @@ exclude_re = [
     # Reads of the real system, verified on real hosts rather than by unit tests:
     "host.rs.*replace hostname ->",
     "host.rs.*(in|replace) (counters|physical_interfaces|read_parsed)\\b",
+    "cgroup.rs.*(in|replace) (container_cpu|unit_cpu|cpu_file|container_memory|read_ns)\\b",
     "systemd.rs.*replace (collect|show) ->",
     "datastore.rs.*replace query_lag ->",
     "logs.rs.*(in|replace) read(_one|_tail)?\\b",

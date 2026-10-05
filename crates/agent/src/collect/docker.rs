@@ -1,7 +1,6 @@
 //! Docker Engine API calls. Read-only: list, inspect, events, logs (in `logs.rs`), info.
 //! Every call has a deadline: bollard's own timeout does not cover reading a response body.
 
-use super::containers::working_set;
 use super::split;
 use anyhow::{Context, anyhow};
 use bollard::errors::Error;
@@ -95,18 +94,4 @@ pub async fn events(
         filters: Some(filters),
     };
     within(5, "events", docker.events(Some(options)).try_collect()).await
-}
-
-/// cgroup v2 working set, for the systemd and cgroupfs layouts.
-pub fn memory(id: &str) -> Option<u64> {
-    [
-        format!("/sys/fs/cgroup/system.slice/docker-{id}.scope"),
-        format!("/sys/fs/cgroup/docker/{id}"),
-    ]
-    .iter()
-    .find_map(|dir| {
-        let current = std::fs::read_to_string(format!("{dir}/memory.current")).ok()?;
-        let stat = std::fs::read_to_string(format!("{dir}/memory.stat")).unwrap_or_default();
-        Some(working_set(current.trim().parse().ok()?, &stat))
-    })
 }

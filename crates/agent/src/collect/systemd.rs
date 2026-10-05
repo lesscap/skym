@@ -5,12 +5,21 @@ use skym_core::model::{RunState, WorkloadFacts, WorkloadKind, WorkloadState};
 use skym_core::subject::WorkloadKey;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A running unit's `ControlGroup`, and which run of the unit (`InvocationID`) it holds.
+#[derive(Debug, PartialEq)]
+pub struct Cgroup {
+    pub path: String,
+    pub run: String,
+}
+
 pub struct Unit {
     pub key: WorkloadKey,
     pub facts: WorkloadFacts,
     pub state: WorkloadState,
     /// systemd's `NRestarts`: automatic restarts since the unit was loaded.
     pub restart_count: Option<u32>,
+    /// Where its CPU time is counted, while it runs.
+    pub cgroup: Option<Cgroup>,
 }
 
 pub async fn collect(host: &str, units: &[SystemdUnit]) -> (Vec<Unit>, Vec<String>) {
@@ -30,12 +39,12 @@ pub async fn collect(host: &str, units: &[SystemdUnit]) -> (Vec<Unit>, Vec<Strin
             if not_found(&props) {
                 errors.push(format!("systemd {}: unit not found", unit.unit));
             }
-            Ok((unit_state(&props)?, restart_count(&props)))
+            Ok((unit_state(&props)?, restart_count(&props), cgroup(&props)))
         });
         match shown {
-            Ok(((run, memory), restart_count)) => {
+            Ok(((run, memory), restart_count, cgroup)) => {
                 let (key, facts, state) = workload(host, unit, run, memory, listening.as_ref());
-                workloads.push(Unit { key, facts, state, restart_count });
+                workloads.push(Unit { key, facts, state, restart_count, cgroup });
             }
             Err(e) => errors.push(format!("systemd {}: {e}", unit.unit)),
         }
@@ -78,6 +87,7 @@ fn workload(
         datastore: None,
         state_since: None,
         oom_killed: false,
+        cpu_cores: None,
         health_failing_streak: None,
         health_output: None,
     };
@@ -86,7 +96,8 @@ fn workload(
 
 /// Bounded: a wedged systemd must not stall the pass. The child is killed on timeout.
 async fn show(unit: &str) -> Result<String, String> {
-    let props = "LoadState,ActiveState,SubState,MemoryCurrent,NRestarts";
+    let props = "LoadState,ActiveState,SubState,MemoryCurrent,NRestarts,ControlGroup,InvocationID,\
+                 ActiveEnterTimestampMonotonic";
     let run = tokio::process::Command::new("systemctl")
         .args(["show", unit, "-p", props])
         .kill_on_drop(true)
@@ -124,6 +135,15 @@ pub fn unit_state(props: &BTreeMap<&str, &str>) -> Result<(RunState, Option<u64>
 
 pub fn restart_count(props: &BTreeMap<&str, &str>) -> Option<u32> {
     props.get("NRestarts")?.parse().ok()
+}
+
+/// A running unit's cgroup. Its run is the `InvocationID`, or before systemd 232 when it
+/// last became active.
+pub fn cgroup(props: &BTreeMap<&str, &str>) -> Option<Cgroup> {
+    let path = props.get("ControlGroup").filter(|g| !g.is_empty())?;
+    let known = |name| props.get(name).filter(|v| !v.is_empty() && **v != "0");
+    let run = known("InvocationID").or_else(|| known("ActiveEnterTimestampMonotonic"))?;
+    Some(Cgroup { path: path.to_string(), run: run.to_string() })
 }
 
 /// Listening ports across the socket tables that could be read; `None` if none could.
@@ -198,5 +218,19 @@ mod tests {
         assert_eq!(restart_count(&parse_show("NRestarts=4\n")), Some(4));
         assert_eq!(restart_count(&parse_show("NRestarts=[not set]\n")), None);
         assert_eq!(restart_count(&parse_show("ActiveState=active\n")), None);
+    }
+    #[test]
+    fn a_running_unit_has_a_cgroup_and_a_run() {
+        let running = "ControlGroup=/system.slice/xray.service\nInvocationID=4f1c\n";
+        assert_eq!(
+            cgroup(&parse_show(running)),
+            Some(Cgroup { path: "/system.slice/xray.service".into(), run: "4f1c".into() })
+        );
+        let old = "ControlGroup=/system.slice/xray.service\nInvocationID=\n\
+                   ActiveEnterTimestampMonotonic=8123456\n";
+        assert_eq!(cgroup(&parse_show(old)).unwrap().run, "8123456", "systemd before 232");
+        let unknown = "ControlGroup=/system.slice/xray.service\nActiveEnterTimestampMonotonic=0\n";
+        assert_eq!(cgroup(&parse_show(unknown)), None, "no way to tell its runs apart");
+        assert_eq!(cgroup(&parse_show("ControlGroup=\nInvocationID=\n")), None, "not running");
     }
 }

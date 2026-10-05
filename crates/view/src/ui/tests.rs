@@ -367,12 +367,18 @@ fn the_applications_page_groups_by_environment() {
     };
     let list = AppList {
         apps: vec![
-            app_summary(
-                "y/shop",
-                Some("prod"),
-                Status::Ok,
-                vec![endpoint("https://shop.example.com/", Some(84), vec![])],
-            ),
+            AppSummary {
+                workloads: vec![WorkloadSummary {
+                    cpu_cores: Some(0.3),
+                    ..fixtures::workload("y/shop/web")
+                }],
+                ..app_summary(
+                    "y/shop",
+                    Some("prod"),
+                    Status::Ok,
+                    vec![endpoint("https://shop.example.com/", Some(84), vec![])],
+                )
+            },
             app_summary("y/shop-test", Some("test"), Status::Ok, vec![]),
             app_summary("i/-/hbbs", None, Status::Ok, vec![]),
         ],
@@ -385,7 +391,16 @@ fn the_applications_page_groups_by_environment() {
     let lines = render(&app, Theme { color: false }, 110, 14);
     let shop = line_of(&lines, " shop ");
     assert!(line_of(&lines, "▾ PROD") < shop && shop < line_of(&lines, "▸ TEST"));
-    assert!(lines[line_of(&lines, "MEM")].contains("SVC   MEM"), "after the services");
+    assert!(lines[line_of(&lines, "MEM")].contains("SVC   CPU   MEM"), "after the services");
+    assert!(lines[shop].contains(" 0.30 "), "the cores its services keep busy");
+    let narrow = render(&app, Theme { color: false }, 80, 14);
+    let shop80 = &narrow[line_of(&narrow, " shop ")];
+    assert!(shop80.contains("✓  shop ") && shop80.contains(" 0.30 "), "{shop80}");
+    if let Some(list) = app.apps.value.as_mut() {
+        list.apps[0].name = "shop-frontend-api-v2-x".into(); // 22 characters
+    }
+    let narrow = render(&app, Theme { color: false }, 80, 14);
+    line_of(&narrow, "✓  shop-frontend-api-v2-x ");
     assert!(
         lines[shop].contains("shop.example.com  84ms") && lines[shop].ends_with("1h│"),
         "{}",
@@ -500,7 +515,8 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
         ..fixtures::app("x/shop")
     };
     a.endpoints[0].cert_expires_at = Some(t(60 * 24 * 30));
-    a.workloads = vec![using(3_000_000_000), using(100_000_000)];
+    let busy = WorkloadSummary { cpu_cores: Some(1.2), ..using(100_000_000) };
+    a.workloads = vec![using(3_000_000_000), busy];
     let small = |name: &str, bytes| AppSummary {
         key: format!("x/{name}").parse().unwrap(),
         name: name.into(),
@@ -541,7 +557,7 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
     app.open_groups.insert((Grouping::Env, "prod".into()));
     let lines = render(&app, Theme { color: false }, 120, 24);
     line_of(&lines, "by environment · most memory first");
-    assert!(lines[line_of(&lines, "MEM ▼")].contains("SVC   MEM ▼"));
+    assert!(lines[line_of(&lines, "MEM ▼")].contains("SVC   CPU   MEM ▼"));
     assert!(
         line_of(&lines, " Shop ") < line_of(&lines, " a1 ")
             && line_of(&lines, " a2 ") < line_of(&lines, " a3 ")
@@ -572,6 +588,8 @@ fn the_apps_and_hosts_tabs_preview_their_selection() {
         lines[line_of(&lines, "top mem")].contains("Shop 3.1G · a1 1.0G · a2 500M · 2 others 300M"),
         "the three largest, then the rest"
     );
+    let top_cpu = line_of(&lines, "top cpu  Shop 1.20");
+    assert!(top_cpu > line_of(&lines, "top mem"), "the first to go when there is no room");
     let data = &lines[line_of(&lines, "/data ")..];
     assert!(data.iter().any(|l| l.contains("filling up")), "the disk in full, flagged");
 }

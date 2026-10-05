@@ -1,7 +1,9 @@
 //! The preview under (or beside) a list: what the selected row is, without opening it.
 
 use super::Theme;
-use super::format::{ago, answer, app_count, cpu_use, local, memory, rate, reason, size, usage};
+use super::format::{
+    ago, answer, app_count, cores, cpu_use, local, memory, rate, reason, size, usage,
+};
 use crate::app::App;
 use crate::apps::{self, Group, UNCLASSIFIED};
 use crate::problems::{Age, Row};
@@ -72,24 +74,30 @@ pub fn label(text: &str, theme: Theme) -> Span<'static> {
     Span::styled(format!(" {text:<9}"), theme.dim())
 }
 
-/// `top mem  docker 2.3G · i 1.6G · baton 1.5G · 25 others 3.6G`, when any reports memory.
-fn top_memory(apps: &[&AppSummary], theme: Theme) -> Option<Line<'static>> {
-    let mut using: Vec<(&str, u64)> =
-        apps.iter().filter_map(|a| Some((a.name.as_str(), apps::used_memory(a)?))).collect();
-    using.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+/// `top mem  docker 2.3G · i 1.6G · baton 1.5G · 25 others 3.6G`: the three largest users of
+/// one resource on a host, then the rest; none when no application reports it.
+fn top(
+    name: &str,
+    apps: &[&AppSummary],
+    used: impl Fn(&AppSummary) -> Option<f64>,
+    show: impl Fn(f64) -> String,
+    theme: Theme,
+) -> Option<Line<'static>> {
+    let mut using: Vec<(&str, f64)> =
+        apps.iter().filter_map(|a| Some((a.name.as_str(), used(a)?))).collect();
+    using.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
     let rest = using.split_off(using.len().min(3));
     let mut parts: Vec<String> =
-        using.iter().map(|(name, bytes)| format!("{name} {}", size(*bytes))).collect();
+        using.iter().map(|(name, value)| format!("{name} {}", show(*value))).collect();
     match rest.as_slice() {
         [] => {}
-        [(name, bytes)] => parts.push(format!("{name} {}", size(*bytes))),
+        [(name, value)] => parts.push(format!("{name} {}", show(*value))),
         _ => {
-            let others: u64 = rest.iter().map(|(_, b)| b).sum();
-            parts.push(format!("{} others {}", rest.len(), size(others)));
+            let others: f64 = rest.iter().map(|(_, v)| v).sum();
+            parts.push(format!("{} others {}", rest.len(), show(others)));
         }
     }
-    (!parts.is_empty())
-        .then(|| Line::from(vec![label("top mem", theme), Span::raw(parts.join(" · "))]))
+    (!parts.is_empty()).then(|| Line::from(vec![label(name, theme), Span::raw(parts.join(" · "))]))
 }
 
 /// `tags     acme · billing`, when it has any.
@@ -312,7 +320,10 @@ pub fn host_body(app: &App, h: &HostOverview, now: Timestamp, theme: Theme) -> V
     if !troubled.is_empty() {
         lines.push(Line::from(vec![label("trouble", theme), Span::raw(troubled.join(", "))]));
     }
-    lines.extend(top_memory(&on_host, theme));
+    let memory = |a: &AppSummary| apps::used_memory(a).map(|b| b as f64);
+    lines.extend(top("top mem", &on_host, memory, |b| size(b as u64), theme));
+    let cpu = |a: &AppSummary| apps::used_cpu(a).map(f64::from);
+    lines.extend(top("top cpu", &on_host, cpu, |c| cores(c as f32), theme));
     lines
 }
 

@@ -1,6 +1,7 @@
 //! One collection pass over the host. A failing source is recorded in `errors`
 //! and contributes nothing; the other sources still run.
 
+pub mod cgroup;
 pub mod containers;
 mod datastore;
 mod docker;
@@ -68,6 +69,8 @@ pub struct Collected {
     pub oom_kill_count: Option<u64>,
     /// CPU and network counters, for rates against the previous pass.
     pub counters: host::Counters,
+    /// Where the running workloads' CPU time is counted.
+    pub targets: Vec<host::Target>,
     /// systemd's `NRestarts` per unit.
     pub unit_restart_counts: BTreeMap<WorkloadKey, u32>,
     /// Docker's events were read up to `Window::now`.
@@ -95,13 +98,21 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window<'_>) -> Collected {
         Some((d, _)) => note(&mut errors, "docker", from_docker(d, cfg, host, w).await),
         None => None,
     };
-    // Informational only: a failure here must not make the server treat the host's
-    // subjects as unobserved, so it is logged, not reported.
-    let (counters, warnings) = host::counters();
-    warnings.iter().for_each(|w| eprintln!("warning: {w}"));
     let oom_kill_count =
         std::fs::read_to_string("/proc/vmstat").ok().and_then(|s| host::oom_kills(&s));
     let (units, unit_errors) = systemd::collect(host, &cfg.systemd).await;
+    let unit_targets = units.iter().filter_map(|u| {
+        let group = u.cgroup.as_ref()?;
+        let cpu = cgroup::unit_cpu(&group.path)?;
+        Some(host::Target { key: u.key.clone(), instance: group.run.clone(), cpu })
+    });
+    let targets: Vec<host::Target> =
+        from_docker.iter().flat_map(|o| o.targets.iter().cloned()).chain(unit_targets).collect();
+    // Last, all at once: every counter of the pass is dated by one uptime. Informational
+    // only: a failure here must not make the server treat the host's subjects as
+    // unobserved, so it is logged, not reported.
+    let (counters, warnings) = host::counters(&targets);
+    warnings.iter().for_each(|w| eprintln!("warning: {w}"));
     let outcomes = [
         Some(host_info.is_some()),
         cfg.docker.enabled.then_some(from_docker.is_some()),
@@ -123,6 +134,7 @@ pub async fn collect(cfg: &Config, host: &str, w: &Window<'_>) -> Collected {
         log_ends: out.log_ends,
         oom_kill_count,
         counters,
+        targets,
         unit_restart_counts,
         events_read: out.events_read,
         workloads_complete: !cfg.docker.enabled || out.complete,
@@ -168,6 +180,7 @@ struct DockerOutput {
     log_ends: BTreeMap<WorkloadKey, Timestamp>,
     events_read: bool,
     complete: bool,
+    targets: Vec<host::Target>,
 }
 
 async fn from_docker(
@@ -203,6 +216,16 @@ async fn from_docker(
         .collect();
     let read = logs::read(d, &targets, w.detail).await;
     errors.extend(read.errors);
+    // A running container's CPU counter; its id and start tell its runs apart.
+    let cpu_targets = probed
+        .iter()
+        .filter(|(wl, id)| wl.state.run == RunState::Running && !id.is_empty())
+        .filter_map(|(wl, id)| {
+            let started = wl.state.state_since.map_or(String::new(), |t| t.to_string());
+            let cpu = cgroup::container_cpu(id)?;
+            Some(host::Target { key: wl.key.clone(), instance: format!("{id} {started}"), cpu })
+        })
+        .collect();
     Ok(DockerOutput {
         workloads: probed.into_iter().map(|(wl, _)| wl).collect(),
         transient,
@@ -212,6 +235,7 @@ async fn from_docker(
         log_ends: read.ends,
         events_read,
         complete,
+        targets: cpu_targets,
     })
 }
 
@@ -227,7 +251,7 @@ fn workload(
     restarts: &mut BTreeMap<WorkloadKey, Vec<Timestamp>>,
 ) -> Workload {
     let running = i.state.as_ref().and_then(|s| s.running) == Some(true);
-    let memory = i.id.as_deref().filter(|_| running).and_then(docker::memory);
+    let memory = i.id.as_deref().filter(|_| running).and_then(cgroup::container_memory);
     let state = state_of(i, restarts.remove(&key).unwrap_or_default(), memory);
     Workload { key, facts: facts_of(i), state }
 }

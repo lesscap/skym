@@ -114,6 +114,9 @@ pub struct WorkloadSummary {
     pub memory_used_bytes: Option<u64>,
     #[serde(default)]
     pub memory_limit_bytes: Option<u64>,
+    /// As in `WorkloadState`: CPUs kept busy since the previous report.
+    #[serde(default)]
+    pub cpu_cores: Option<f32>,
     #[serde(default)]
     pub restarts_last_hour: u32,
     /// The last healthcheck's output while it fails.
@@ -436,6 +439,7 @@ pub fn workload_summary(
         restart_policy: facts.and_then(|f| f.restart_policy.clone()),
         ports: facts.map(|f| f.ports.clone()).unwrap_or_default(),
         memory_used_bytes: state.memory_used_bytes,
+        cpu_cores: state.cpu_cores,
         memory_limit_bytes: facts.and_then(|f| f.memory_limit_bytes),
         restarts_last_hour: state.restarts.len() as u32,
         // A stopped container keeps its last check's output: it says nothing now.

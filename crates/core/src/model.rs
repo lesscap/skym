@@ -172,6 +172,11 @@ pub struct WorkloadState {
     /// The last exit was an out-of-memory kill.
     #[serde(default)]
     pub oom_killed: bool,
+    /// Since the previous pass, in CPUs (1.5 = one and a half kept busy). `None` on a first
+    /// pass, for a stopped workload, a new instance (recreated or restarted), or without CPU
+    /// accounting.
+    #[serde(default)]
+    pub cpu_cores: Option<f32>,
     /// Consecutive failed healthchecks, and the last check's output (truncated, redacted).
     #[serde(default)]
     pub health_failing_streak: Option<u32>,

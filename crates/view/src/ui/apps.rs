@@ -1,9 +1,9 @@
 //! Every application, grouped by environment; and one application with its URLs and services.
 
-use super::format::{ago, answer, app_count, reason, size, usage};
+use super::format::{ago, answer, app_count, cores, reason, size, usage};
 use super::{Theme, block, draw_preview, empty_row, preview, problem_table, with_preview};
 use crate::app::{App, AppRow};
-use crate::apps::{Group, Grouping, Sort, used_memory};
+use crate::apps::{Group, Grouping, Sort, used_cpu, used_memory};
 use crate::names;
 use jiff::Timestamp;
 use ratatui::Frame;
@@ -53,7 +53,7 @@ pub fn list(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
     );
     let selected = (!listed.is_empty()).then_some(app.frame().cursor);
     let mut state = TableState::default().with_selected(selected);
-    let table = Table::new(rows, APP_COLUMNS)
+    let table = Table::new(rows, app_columns(area.width))
         .header(app_header("HOST", app, theme))
         .block(block(title, theme))
         .row_highlight_style(theme.selected(true));
@@ -77,22 +77,35 @@ fn group_row(g: &Group, by: Grouping, theme: Theme) -> Row<'static> {
         )),
         Cell::from(Line::styled(app_count(g.all.len()), theme.dim())),
         Cell::from(""),
+        Cell::from(""),
         Cell::from(Line::from(g.memory().map_or(String::new(), size)).right_aligned()),
     ])
 }
 
-/// Status, name, host or environment, services, memory, up for, first URL, errors, deployed.
-const APP_COLUMNS: [Constraint; 9] = [
+/// Status, name, host or environment, services, CPU, memory, up for, first URL, errors,
+/// deployed.
+const APP_COLUMNS: [Constraint; 10] = [
     Constraint::Length(3),
     Constraint::Length(22),
     Constraint::Length(9), // `external` fits
     Constraint::Length(5),
+    Constraint::Length(5), // `12.5`, cores
     Constraint::Length(9), // `999M 100%` fits
     Constraint::Length(7),
     Constraint::Fill(1),
     Constraint::Length(6),
     Constraint::Length(9),
 ];
+
+/// The columns for a table `width` wide: below the room for all of them, the deployment
+/// time goes first, so names keep their width.
+fn app_columns(width: u16) -> [Constraint; 10] {
+    let mut columns = APP_COLUMNS;
+    if width < 88 {
+        columns[9] = Constraint::Length(0);
+    }
+    columns
+}
 
 /// One application's line: `second` is where it runs (in the list) or its environment (on a
 /// host). Its memory, with its share of `host_memory`. Then its first URL and how it
@@ -115,6 +128,7 @@ fn app_row(
         Cell::from(a.name.clone()),
         Cell::from(second),
         Cell::from(format!("{}/{}", a.running, a.services)),
+        Cell::from(Line::from(used_cpu(a).map_or("—".into(), cores)).right_aligned()),
         Cell::from(Line::from(mem_cell(a, host_memory)).right_aligned()),
         Cell::from(Line::from(up(a, now)).right_aligned()),
         Cell::from(url),
@@ -133,7 +147,7 @@ fn app_row(
 /// The columns' names: `second` is HOST or ENV; a `▼` on the one the applications are
 /// sorted by.
 fn app_header(second: &'static str, app: &App, theme: Theme) -> Row<'static> {
-    let names = ["", "APP", second, "SVC", "MEM", "UP", "URL", "ERR 1H", "DEPLOYED"];
+    let names = ["", "APP", second, "SVC", "CPU", "MEM", "UP", "URL", "ERR 1H", "DEPLOYED"];
     let sorted = app.sort.column();
     let names = names.map(|n| if Some(n) == sorted { format!("{n} ▼") } else { n.to_string() });
     Row::new(names).style(theme.dim())
@@ -172,7 +186,7 @@ pub(super) fn host_apps(f: &mut Frame, area: Rect, app: &App, now: Timestamp, th
     if rows.is_empty() {
         rows.push(empty_row(1, "(none)".into(), theme));
     }
-    let widths = APP_COLUMNS;
+    let widths = app_columns(area.width);
     let order = app.sort.label();
     let title = format!(" Apps ({}) · {order} ", apps.len());
     let mut state = TableState::default().with_selected(Some(app.frame().cursor));
@@ -226,6 +240,7 @@ pub(super) fn service_table(f: &mut Frame, area: Rect, app: &App, now: Timestamp
             } else {
                 ""
             };
+            let cpu = w.cpu_cores.map_or(String::new(), cores);
             let memory =
                 w.memory_used_bytes.map_or(String::new(), |used| usage(used, w.memory_limit_bytes));
             let restarts = match w.restarts_last_hour {
@@ -237,6 +252,7 @@ pub(super) fn service_table(f: &mut Frame, area: Rect, app: &App, now: Timestamp
                 Cell::from(format!("{}/{}", w.key.project, w.key.service)),
                 Cell::from(run),
                 Cell::from(Line::from(since).right_aligned()),
+                Cell::from(Line::from(cpu).right_aligned()),
                 Cell::from(Line::from(memory).right_aligned()),
                 Cell::from(Line::from(restarts).right_aligned()),
                 Cell::from(w.image.clone().unwrap_or_default()),
@@ -254,6 +270,7 @@ pub(super) fn service_table(f: &mut Frame, area: Rect, app: &App, now: Timestamp
         Constraint::Percentage(25),
         Constraint::Length(12),
         Constraint::Length(8),
+        Constraint::Length(5),
         Constraint::Length(13),
         Constraint::Length(4),
         Constraint::Fill(1),
@@ -261,7 +278,7 @@ pub(super) fn service_table(f: &mut Frame, area: Rect, app: &App, now: Timestamp
     ];
     let title = format!(" Services ({}) · problems first ", services.len());
     let mut state = TableState::default().with_selected(Some(app.frame().cursor));
-    let header = ["", "SERVICE", "RUN", "FOR", "MEMORY", "RST", "IMAGE", ""];
+    let header = ["", "SERVICE", "RUN", "FOR", "CPU", "MEMORY", "RST", "IMAGE", ""];
     let table = Table::new(rows, widths)
         .header(Row::new(header).style(theme.dim()))
         .block(block(title, theme))

@@ -189,6 +189,7 @@ pub fn state_of(
             })
             .and_then(timestamp),
         oom_killed: state.and_then(|s| s.oom_killed) == Some(true),
+        cpu_cores: None,
         health_failing_streak: checks
             .and_then(|h| h.failing_streak)
             .filter(|n| *n > 0)
