@@ -1,8 +1,0 @@
-# skym-notify from a static (musl) binary built beforehand:
-#   cargo zigbuild --release -p skym-notify --target x86_64-unknown-linux-musl
-# No CA certificates inside: mount the host's (-v /etc/ssl/certs:/etc/ssl/certs:ro) to reach
-# Feishu and healthchecks.io over https.
-FROM scratch
-COPY skym-notify /skym-notify
-VOLUME /var/lib/skym-notify
-ENTRYPOINT ["/skym-notify", "--config", "/etc/skym-notify/notify.toml"]

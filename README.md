@@ -31,7 +31,6 @@ Thresholds, severities, and when an incident opens or resolves are decided by sk
 - **Push only.** Hosts open no port and the server never connects to them; a host that goes quiet is itself the alarm.
 - **The server is an API.** It judges and stores; it serves no web pages.
 - **One API for people and agents.** `skym-view` and an AI agent read the same endpoints and see the same judgements.
-- **Notifications are one more reader.** `skym-notify` reads the same API and tells a Feishu group when a problem appears, gets worse or resolves; healthchecks.io alerts if it stops.
 
 ## What makes it different
 
@@ -129,7 +128,6 @@ Under development; no releases yet.
 | `skym-server` | Working: report ingest, incidents, heartbeat loss, disk projection, query API |
 | `skym-view` | Working: a terminal view of the server for people (read-only) |
 | Endpoint and TLS probes | Working: configured URLs, optional probe tokens, certificate expiry |
-| `skym-notify` | Working: Feishu group messages, healthchecks.io dead man's switch |
 | Releases | Later |
 
 ## License
