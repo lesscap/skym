@@ -96,7 +96,8 @@ fn workload(
 
 /// Bounded: a wedged systemd must not stall the pass. The child is killed on timeout.
 async fn show(unit: &str) -> Result<String, String> {
-    let props = "LoadState,ActiveState,SubState,MemoryCurrent,NRestarts,ControlGroup,InvocationID";
+    let props = "LoadState,ActiveState,SubState,MemoryCurrent,NRestarts,ControlGroup,InvocationID,\
+                 ActiveEnterTimestampMonotonic";
     let run = tokio::process::Command::new("systemctl")
         .args(["show", unit, "-p", props])
         .kill_on_drop(true)
@@ -136,10 +137,12 @@ pub fn restart_count(props: &BTreeMap<&str, &str>) -> Option<u32> {
     props.get("NRestarts")?.parse().ok()
 }
 
-/// A running unit's cgroup; its path stands for a missing `InvocationID`.
+/// A running unit's cgroup. Its run is the `InvocationID`, or before systemd 232 when it
+/// last became active.
 pub fn cgroup(props: &BTreeMap<&str, &str>) -> Option<Cgroup> {
     let path = props.get("ControlGroup").filter(|g| !g.is_empty())?;
-    let run = props.get("InvocationID").filter(|i| !i.is_empty()).unwrap_or(path);
+    let known = |name| props.get(name).filter(|v| !v.is_empty() && **v != "0");
+    let run = known("InvocationID").or_else(|| known("ActiveEnterTimestampMonotonic"))?;
     Some(Cgroup { path: path.to_string(), run: run.to_string() })
 }
 
@@ -223,8 +226,11 @@ mod tests {
             cgroup(&parse_show(running)),
             Some(Cgroup { path: "/system.slice/xray.service".into(), run: "4f1c".into() })
         );
-        let no_id = "ControlGroup=/system.slice/xray.service\nInvocationID=\n";
-        assert_eq!(cgroup(&parse_show(no_id)).unwrap().run, "/system.slice/xray.service");
+        let old = "ControlGroup=/system.slice/xray.service\nInvocationID=\n\
+                   ActiveEnterTimestampMonotonic=8123456\n";
+        assert_eq!(cgroup(&parse_show(old)).unwrap().run, "8123456", "systemd before 232");
+        let unknown = "ControlGroup=/system.slice/xray.service\nActiveEnterTimestampMonotonic=0\n";
+        assert_eq!(cgroup(&parse_show(unknown)), None, "no way to tell its runs apart");
         assert_eq!(cgroup(&parse_show("ControlGroup=\nInvocationID=\n")), None, "not running");
     }
 }

@@ -47,7 +47,7 @@ Each command reads at most the last 20,000 log lines per container; on a very bu
 
 ### `report --dry-run`
 
-Shows exactly what leaves the host. Host owners can audit it before and after installation. It takes a second longer than a pass: rates (the host's CPU and network, each workload's CPU) are measured over the second after it, and it prints how many running workloads have a CPU counter.
+Shows exactly what leaves the host. Host owners can audit it before and after installation. It takes a second longer than a pass: rates (the host's CPU and network, each workload's CPU) are measured over the second after it, and it prints how many running workloads had their CPU time read.
 
 ## Configuration
 

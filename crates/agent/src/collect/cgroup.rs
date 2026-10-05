@@ -33,8 +33,13 @@ pub fn unit_cpu(control_group: &str) -> Option<CpuFile> {
     cpu_file(&[group.to_string()])
 }
 
+/// Under the v2 root, then a hybrid host's v2 tree (`unified`), then v1's `cpu,cpuacct`.
 fn cpu_file(groups: &[String]) -> Option<CpuFile> {
-    let v2 = groups.iter().map(|g| Path::new(ROOT).join(g).join("cpu.stat")).map(CpuFile::V2);
+    let roots = [Path::new(ROOT).to_path_buf(), Path::new(ROOT).join("unified")];
+    let v2 = roots
+        .iter()
+        .flat_map(|root| groups.iter().map(move |g| root.join(g).join("cpu.stat")))
+        .map(CpuFile::V2);
     let v1 =
         groups.iter().map(|g| Path::new(ROOT).join("cpu,cpuacct").join(g).join("cpuacct.usage"));
     v2.chain(v1.map(CpuFile::V1)).find(|f| match f {

@@ -9,6 +9,7 @@ use jiff::{SignedDuration, Timestamp};
 use skym_core::judge::{JudgeInput, Recent, judge};
 use skym_core::model::{ExceptionGroup, RunState};
 use skym_core::report::{Report, validate};
+use skym_core::subject::WorkloadKey;
 use skym_core::time::parse_since;
 use skym_core::view::{HostView, Status};
 use std::collections::{BTreeMap, BTreeSet};
@@ -92,9 +93,10 @@ pub async fn report_dry_run(cfg: &Config) -> anyhow::Result<u8> {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     (c.counters, _) = collect::host::counters(&c.targets);
     Memory::starting_from(before).rates(&mut c);
-    let running = c.workloads.iter().filter(|w| w.state.run == RunState::Running).count();
-    let read = c.counters.workloads.len();
-    eprintln!("cpu: {read}/{running} running workloads had their CPU time read");
+    let running: Vec<&WorkloadKey> =
+        c.workloads.iter().filter(|w| w.state.run == RunState::Running).map(|w| &w.key).collect();
+    let read = running.iter().filter(|k| c.counters.workloads.contains_key(**k)).count();
+    eprintln!("cpu: {read}/{} running workloads had their CPU time read", running.len());
     println!("{}", serde_json::to_string_pretty(&report::build(&c, &host, now))?);
     Ok(status::exit_code(Status::Ok, !c.errors.is_empty(), c.all_failed))
 }

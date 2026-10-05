@@ -238,6 +238,11 @@ fn a_running_workload_without_a_counter_is_reported_once() {
     let keys = |ks: Vec<WorkloadKey>| ks.into_iter().map(|k| k.service).collect::<Vec<_>>();
     assert_eq!(keys(m.uncounted(&c)), ["api", "web"]);
     assert_eq!(keys(m.uncounted(&c)), Vec::<String>::new(), "said once");
+    let cut_short = Collected { workloads_complete: false, ..pass(vec![workload("web", &[])]) };
+    m.uncounted(&cut_short);
+    assert!(m.uncounted(&c).is_empty(), "a listing cut short forgets nothing");
+    m.uncounted(&pass(vec![workload("web", &[])]));
+    assert_eq!(keys(m.uncounted(&c)), ["api"], "gone from a complete one: said again");
     let counted = crate::collect::host::Target {
         key: workload("db", &[]).key,
         instance: "x".into(),
@@ -245,8 +250,4 @@ fn a_running_workload_without_a_counter_is_reported_once() {
     };
     let c = Collected { targets: vec![counted], ..pass(vec![workload("db", &[])]) };
     assert!(m.uncounted(&c).is_empty(), "one with a counter is not reported");
-    let gone = pass(vec![workload("web", &[])]);
-    m.uncounted(&gone);
-    let back = pass(vec![workload("api", &[]), workload("web", &[])]);
-    assert_eq!(keys(m.uncounted(&back)), ["api"], "forgotten once gone, so said again");
 }

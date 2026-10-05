@@ -53,7 +53,7 @@ pub fn list(f: &mut Frame, area: Rect, app: &App, now: Timestamp, theme: Theme) 
     );
     let selected = (!listed.is_empty()).then_some(app.frame().cursor);
     let mut state = TableState::default().with_selected(selected);
-    let table = Table::new(rows, APP_COLUMNS)
+    let table = Table::new(rows, app_columns(area.width))
         .header(app_header("HOST", app, theme))
         .block(block(title, theme))
         .row_highlight_style(theme.selected(true));
@@ -96,6 +96,16 @@ const APP_COLUMNS: [Constraint; 10] = [
     Constraint::Length(6),
     Constraint::Length(9),
 ];
+
+/// The columns for a table `width` wide: below the room for all of them, the deployment
+/// time goes first, so names keep their width.
+fn app_columns(width: u16) -> [Constraint; 10] {
+    let mut columns = APP_COLUMNS;
+    if width < 88 {
+        columns[9] = Constraint::Length(0);
+    }
+    columns
+}
 
 /// One application's line: `second` is where it runs (in the list) or its environment (on a
 /// host). Its memory, with its share of `host_memory`. Then its first URL and how it
@@ -176,7 +186,7 @@ pub(super) fn host_apps(f: &mut Frame, area: Rect, app: &App, now: Timestamp, th
     if rows.is_empty() {
         rows.push(empty_row(1, "(none)".into(), theme));
     }
-    let widths = APP_COLUMNS;
+    let widths = app_columns(area.width);
     let order = app.sort.label();
     let title = format!(" Apps ({}) · {order} ", apps.len());
     let mut state = TableState::default().with_selected(Some(app.frame().cursor));

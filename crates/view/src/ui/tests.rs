@@ -396,6 +396,11 @@ fn the_applications_page_groups_by_environment() {
     let narrow = render(&app, Theme { color: false }, 80, 14);
     let shop80 = &narrow[line_of(&narrow, " shop ")];
     assert!(shop80.contains("✓  shop ") && shop80.contains(" 0.30 "), "{shop80}");
+    if let Some(list) = app.apps.value.as_mut() {
+        list.apps[0].name = "shop-frontend-api-v2-x".into(); // 22 characters
+    }
+    let narrow = render(&app, Theme { color: false }, 80, 14);
+    line_of(&narrow, "✓  shop-frontend-api-v2-x ");
     assert!(
         lines[shop].contains("shop.example.com  84ms") && lines[shop].ends_with("1h│"),
         "{}",

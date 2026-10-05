@@ -77,10 +77,13 @@ impl Memory {
         }
     }
 
-    /// Running workloads without a CPU counter not reported before. One that leaves is
-    /// forgotten, so the set holds only what runs now.
+    /// Running workloads without a CPU counter not reported before. One gone from a complete
+    /// listing is forgotten, so the set holds only workloads that still exist; a listing cut
+    /// short (Docker unreachable) forgets nothing, or each would be reported again.
     fn uncounted(&mut self, c: &Collected) -> Vec<WorkloadKey> {
-        self.uncounted.retain(|key| c.workloads.iter().any(|w| w.key == *key));
+        if c.workloads_complete {
+            self.uncounted.retain(|key| c.workloads.iter().any(|w| w.key == *key));
+        }
         let counted = |key: &WorkloadKey| c.targets.iter().any(|t| t.key == *key);
         let running = c.workloads.iter().filter(|w| w.state.run == RunState::Running);
         let new: Vec<WorkloadKey> = running
