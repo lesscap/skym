@@ -63,6 +63,7 @@
         "health": "healthy",
         "restarts": [],
         "memory_used_bytes": 268435456,
+        "cpu_cores": 0.25,
         "missing_ports": [],
         "datastore": null
       }

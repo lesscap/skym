@@ -19,6 +19,7 @@ fn full_report_round_trips() {
     assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
     let s = &report.host_state;
     assert_eq!((s.cpu_percent, s.net_tx_bytes_per_s), (Some(23.5), Some(310_000)));
+    assert_eq!(report.workloads[0].state.cpu_cores, Some(0.25));
 }
 
 #[test]

@@ -1,9 +1,11 @@
 //! Host facts and state from `/proc`, `/etc/os-release` and `statvfs`.
 
+use super::cgroup::{CpuFile, read_ns};
 use super::split;
 use anyhow::Context;
 use jiff::Timestamp;
 use skym_core::model::{HostFacts, HostState, MountFacts, MountState, TransientCounts};
+use skym_core::subject::WorkloadKey;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Real block file systems. Network file systems are left out on purpose:
@@ -171,15 +173,36 @@ pub type NetMap = BTreeMap<String, (u64, u64)>;
 /// come from two readings.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Counters {
+    /// The uptime they were read at, when it could be.
+    pub at: Option<u64>,
     pub cpu: Option<(u64, CpuTimes)>,
     /// Physical interfaces.
     pub net: Option<(u64, NetMap)>,
+    /// Running workloads' CPU time.
+    pub workloads: BTreeMap<WorkloadKey, Sample>,
+}
+
+/// A running workload's CPU counter, and which instance of it runs: a container's id and
+/// start, or a unit's run. A new instance counts from zero.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Target {
+    pub key: WorkloadKey,
+    pub instance: String,
+    pub cpu: CpuFile,
+}
+
+/// A workload's CPU time in nanoseconds, read at `at` (uptime, centiseconds).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sample {
+    pub at: u64,
+    pub instance: String,
+    pub ns: u64,
 }
 
 /// The counters, each on its own: one that cannot be read or parsed leaves only itself
 /// out, and is named in the returned warnings. A host without a physical interface simply
 /// has no network rate.
-pub fn counters() -> (Counters, Vec<String>) {
+pub fn counters(targets: &[Target]) -> (Counters, Vec<String>) {
     let mut warnings = Vec::new();
     let at = read_parsed("/proc/uptime", parse_uptime, &mut warnings);
     let cpu = read_parsed("/proc/stat", parse_cpu_times, &mut warnings);
@@ -188,7 +211,14 @@ pub fn counters() -> (Counters, Vec<String>) {
         true => None,
         false => read_parsed("/proc/net/dev", |s| Some(parse_net_dev(s, &physical)), &mut warnings),
     };
-    (Counters { cpu: at.zip(cpu), net: at.zip(net) }, warnings)
+    // A workload gone since it was inspected simply has no sample.
+    let sample = |at: u64, t: &Target| {
+        let ns = read_ns(&t.cpu)?;
+        Some((t.key.clone(), Sample { at, instance: t.instance.clone(), ns }))
+    };
+    let workloads =
+        at.map_or_else(BTreeMap::new, |at| targets.iter().filter_map(|t| sample(at, t)).collect());
+    (Counters { at, cpu: at.zip(cpu), net: at.zip(net), workloads }, warnings)
 }
 
 /// A kernel file, parsed; what went wrong goes to `warnings`.
@@ -268,7 +298,21 @@ pub fn cpu_usage(prev: CpuTimes, cur: CpuTimes) -> Option<(f32, f32, f32)> {
 /// The centiseconds between two readings, when they can make a rate: at least a second,
 /// at most ten minutes (an older average is not "now"), and not across a reboot.
 pub fn span(prev_at: u64, cur_at: u64) -> Option<u64> {
-    cur_at.checked_sub(prev_at).filter(|cs| (100..=60_000).contains(cs))
+    cur_at.checked_sub(prev_at).filter(|cs| (100..=MAX_SPAN).contains(cs))
+}
+
+/// Ten minutes, in centiseconds: the longest a rate may span.
+pub const MAX_SPAN: u64 = 60_000;
+
+/// CPUs kept busy between two samples of the same instance a valid [`span`] apart; a
+/// counter that went back gives none.
+pub fn cores(prev: &Sample, cur: &Sample) -> Option<f32> {
+    if prev.instance != cur.instance {
+        return None;
+    }
+    let elapsed = span(prev.at, cur.at)?;
+    let used = cur.ns.checked_sub(prev.ns)?;
+    Some((used as f64 / (elapsed as f64 * 1e7)) as f32)
 }
 
 /// [`cpu_usage`] between two readings a valid [`span`] apart.
@@ -401,6 +445,13 @@ mod tests {
         assert_eq!(net_rates(&prev, &(900, cur.1.clone())), None, "the clock went back");
         let gone = (1500, map(&[("eth9", 1, 1)]));
         assert_eq!(net_rates(&prev, &gone), None, "no interface in both: unknown, not 0");
+        let sample = |at, instance: &str, ns| Sample { at, instance: instance.into(), ns };
+        let first = sample(1000, "a", 1_000_000_000);
+        assert_eq!(cores(&first, &sample(7000, "a", 31_000_000_000)), Some(0.5));
+        assert_eq!(cores(&first, &sample(7000, "b", 31_000_000_000)), None, "another run");
+        assert_eq!(cores(&first, &sample(7000, "a", 0)), None, "the counter went back");
+        assert_eq!(cores(&first, &sample(1099, "a", 2_000_000_000)), None, "under a second");
+        assert_eq!(cores(&first, &sample(61_001, "a", 2_000_000_000)), None, "over ten minutes");
         let (a, b) = (times(0, 0, 0, 0), times(10, 10, 0, 0));
         assert_eq!(cpu_rates(&(100, a), &(200, b)), Some((50.0, 0.0, 0.0)));
         assert_eq!(cpu_rates(&(100, a), &(199, b)), None, "under a second");

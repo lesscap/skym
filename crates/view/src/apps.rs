@@ -51,12 +51,13 @@ impl Grouping {
 pub enum Sort {
     #[default]
     Problems,
+    Cpu,
     Memory,
 }
 
 impl Sort {
     /// Every order, in the order `s` goes through them.
-    pub const ALL: [Sort; 2] = [Sort::Problems, Sort::Memory];
+    pub const ALL: [Sort; 3] = [Sort::Problems, Sort::Cpu, Sort::Memory];
 
     pub fn next(self) -> Sort {
         let at = Sort::ALL.iter().position(|s| *s == self).unwrap_or(0);
@@ -66,6 +67,7 @@ impl Sort {
     pub fn label(self) -> &'static str {
         match self {
             Sort::Problems => "problems first",
+            Sort::Cpu => "most CPU first",
             Sort::Memory => "most memory first",
         }
     }
@@ -74,6 +76,7 @@ impl Sort {
     pub fn column(self) -> Option<&'static str> {
         match self {
             Sort::Problems => None,
+            Sort::Cpu => Some("CPU"),
             Sort::Memory => Some("MEM"),
         }
     }
@@ -82,18 +85,35 @@ impl Sort {
     pub fn order(self, a: &AppSummary, b: &AppSummary) -> Ordering {
         match self {
             Sort::Problems => b.status.cmp(&a.status),
-            Sort::Memory => used_memory(b).cmp(&used_memory(a)),
+            Sort::Cpu => most_first(used_cpu(a), used_cpu(b), f32::total_cmp),
+            Sort::Memory => most_first(used_memory(a), used_memory(b), u64::cmp),
         }
     }
 }
 
+/// The larger first, `None` last.
+fn most_first<T>(a: Option<T>, b: Option<T>, cmp: impl Fn(&T, &T) -> Ordering) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => cmp(&b, &a),
+        (a, b) => b.is_some().cmp(&a.is_some()),
+    }
+}
+
 /// What an application's workloads report of one resource, summed; `None` if none does.
-fn used(a: &AppSummary, of: impl Fn(&WorkloadSummary) -> Option<u64>) -> Option<u64> {
+fn used<T: std::ops::Add<Output = T>>(
+    a: &AppSummary,
+    of: impl Fn(&WorkloadSummary) -> Option<T>,
+) -> Option<T> {
     a.workloads.iter().filter_map(of).reduce(|x, y| x + y)
 }
 
 pub fn used_memory(a: &AppSummary) -> Option<u64> {
     used(a, |w| w.memory_used_bytes)
+}
+
+/// The CPUs its workloads keep busy.
+pub fn used_cpu(a: &AppSummary) -> Option<f32> {
+    used(a, |w| w.cpu_cores)
 }
 
 #[derive(Debug, PartialEq)]
@@ -295,5 +315,36 @@ mod tests {
         );
         let silent = groups(&apps[1..3], Grouping::Env, Sort::Memory, &open, |_| true);
         assert_eq!(silent[0].memory(), None);
+    }
+
+    #[test]
+    fn cpu_is_summed_and_orders_the_busiest_first() {
+        let busy = |name: &str, cores: &[Option<f32>]| {
+            let workload = |c: &Option<f32>| WorkloadSummary {
+                cpu_cores: *c,
+                ..fixtures::workload(&format!("x/{name}/s"))
+            };
+            AppSummary {
+                workloads: cores.iter().map(workload).collect(),
+                ..app(name, None, Status::Ok)
+            }
+        };
+        let apps = [
+            busy("idle", &[Some(0.0)]),
+            busy("unknown", &[None]),
+            busy("java", &[Some(1.0), Some(0.5)]),
+            busy("nginx", &[Some(0.25)]),
+        ];
+        assert_eq!(
+            apps.iter().map(used_cpu).collect::<Vec<_>>(),
+            [Some(0.0), None, Some(1.5), Some(0.25)]
+        );
+        let mut ordered: Vec<&AppSummary> = apps.iter().collect();
+        ordered.sort_by(|a, b| Sort::Cpu.order(a, b));
+        let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["java", "nginx", "idle", "unknown"], "busiest first, unknown last");
+        assert_eq!(Sort::ALL.map(Sort::column), [None, Some("CPU"), Some("MEM")]);
+        assert_eq!(Sort::Cpu.label(), "most CPU first");
+        assert_eq!(Sort::Memory.next(), Sort::Problems);
     }
 }

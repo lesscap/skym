@@ -1,11 +1,12 @@
-//! What `skym agent` carries from one pass to the next. Pure. Lost on restart, which
-//! simply makes the next pass a first pass.
+//! What `skym agent` carries from one pass to the next. Pure but for one log line per
+//! workload found without a CPU counter. Lost on restart, which simply makes the next pass a
+//! first pass.
 
 use crate::collect::Collected;
-use crate::collect::host::{Counters, cpu_rates, net_rates};
+use crate::collect::host::{Counters, MAX_SPAN, Sample, cores, cpu_rates, net_rates};
 use jiff::{SignedDuration, Timestamp};
-use skym_core::model::LocalEvent;
-use skym_core::subject::WorkloadKey;
+use skym_core::model::{LocalEvent, RunState};
+use skym_core::subject::{Subject, WorkloadKey};
 use std::collections::{BTreeMap, BTreeSet};
 
 const HOUR: SignedDuration = SignedDuration::from_hours(1);
@@ -21,6 +22,8 @@ pub struct Memory {
     oom_kill_count: Option<u64>,
     unit_restart_counts: BTreeMap<WorkloadKey, u32>,
     counters: Counters,
+    /// Running workloads found without a CPU counter, said once each.
+    uncounted: BTreeSet<WorkloadKey>,
 }
 
 impl Memory {
@@ -68,12 +71,36 @@ impl Memory {
             self.until = Some(whole_second(now));
         }
         self.rates(c);
+        for key in self.uncounted(c) {
+            let workload = Subject::Workload(key);
+            eprintln!("warning: {workload}: no cgroup CPU counter found; its CPU stays unknown");
+        }
     }
 
-    /// CPU and network rates since the previous readings, into the host's state. A reading
-    /// that failed keeps the previous one, so the next rate spans both intervals.
+    /// Running workloads without a CPU counter not reported before. One that leaves is
+    /// forgotten, so the set holds only what runs now.
+    fn uncounted(&mut self, c: &Collected) -> Vec<WorkloadKey> {
+        self.uncounted.retain(|key| c.workloads.iter().any(|w| w.key == *key));
+        let counted = |key: &WorkloadKey| c.targets.iter().any(|t| t.key == *key);
+        let running = c.workloads.iter().filter(|w| w.state.run == RunState::Running);
+        let new: Vec<WorkloadKey> = running
+            .map(|w| &w.key)
+            .filter(|key| !counted(key) && !self.uncounted.contains(*key))
+            .cloned()
+            .collect();
+        self.uncounted.extend(new.iter().cloned());
+        new
+    }
+
+    /// CPU and network rates since the previous readings, into the host's state and each
+    /// workload's. A reading that failed keeps the previous one, so the next rate spans both
+    /// intervals; a workload's is kept while it could still make one.
     pub fn rates(&mut self, c: &mut Collected) {
         let (prev, cur) = (&self.counters, &c.counters);
+        for w in &mut c.workloads {
+            let pair = prev.workloads.get(&w.key).zip(cur.workloads.get(&w.key));
+            w.state.cpu_cores = pair.and_then(|(p, n)| cores(p, n));
+        }
         if let Some((_, state)) = &mut c.host {
             let cpu = prev.cpu.as_ref().zip(cur.cpu.as_ref()).and_then(|(p, n)| cpu_rates(p, n));
             if let Some((busy, iowait, steal)) = cpu {
@@ -85,9 +112,16 @@ impl Memory {
                 (state.net_rx_bytes_per_s, state.net_tx_bytes_per_s) = (Some(rx), Some(tx));
             }
         }
+        let recent = |s: &Sample| cur.at.is_none_or(|now| now.saturating_sub(s.at) <= MAX_SPAN);
+        let mut workloads = cur.workloads.clone();
+        for (key, s) in prev.workloads.iter().filter(|(_, s)| recent(s)) {
+            workloads.entry(key.clone()).or_insert_with(|| s.clone());
+        }
         self.counters = Counters {
+            at: cur.at.or(prev.at),
             cpu: cur.cpu.or(prev.cpu),
             net: cur.net.clone().or_else(|| prev.net.clone()),
+            workloads,
         };
     }
 

@@ -107,6 +107,11 @@ pub fn answer(e: &EndpointOverview, with_status: bool) -> String {
     }
 }
 
+/// CPUs kept busy: `0.30`, `12.5`.
+pub fn cores(c: f32) -> String {
+    if c < 9.995 { format!("{c:.2}") } else { format!("{c:.1}") }
+}
+
 /// `540B/s`, `1.2MB/s`.
 pub fn rate(bytes_per_s: u64) -> String {
     match bytes_per_s {
@@ -134,6 +139,12 @@ mod tests {
             (usage(120_000_000, Some(512_000_000)), usage(120_000_000, None)),
             ("120M / 512M".into(), "120M".into())
         );
+    }
+
+    #[test]
+    fn cores_keep_two_decimals_under_ten() {
+        let shown = [0.3, 1.2, 9.99, 9.996, 12.5, 128.0].map(cores);
+        assert_eq!(shown, ["0.30", "1.20", "9.99", "10.0", "12.5", "128.0"]);
     }
 
     #[test]

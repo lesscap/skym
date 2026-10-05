@@ -178,11 +178,16 @@ fn a_host_lists_its_apps_and_an_app_its_services() {
     press(&mut app, &[Key::Esc]);
     let apps = |app: &App| app.host_apps().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
     assert_eq!(apps(&app), ["zz", "app"], "in the server's order: problems first");
-    let using =
-        WorkloadSummary { memory_used_bytes: Some(1_000_000), ..fixtures::workload("x/app/web") };
+    let using = WorkloadSummary {
+        memory_used_bytes: Some(1_000_000),
+        cpu_cores: Some(0.5),
+        ..fixtures::workload("x/app/web")
+    };
     app.host.value.as_mut().unwrap().apps[1].workloads = vec![using];
     press(&mut app, &[Key::Down, Key::Char('s')]);
     assert_eq!(app.frame().cursor, 0, "the selection follows its application");
+    assert_eq!((apps(&app), app.sort), (vec!["app".to_string(), "zz".to_string()], Sort::Cpu));
+    press(&mut app, &[Key::Char('s')]);
     assert_eq!((apps(&app), app.sort), (vec!["app".to_string(), "zz".to_string()], Sort::Memory));
     press(&mut app, &[Key::Char('s')]);
     assert_eq!(
@@ -333,6 +338,7 @@ fn the_applications_tab_groups_folds_and_leads_to_an_app() {
             AppSummary {
                 workloads: vec![WorkloadSummary {
                     memory_used_bytes: Some(1_000_000),
+                    cpu_cores: Some(0.2),
                     ..fixtures::workload("y/shop-test/web")
                 }],
                 ..summary("y/shop-test", Some("test"), Status::Ok)
@@ -352,6 +358,8 @@ fn the_applications_tab_groups_folds_and_leads_to_an_app() {
     assert_eq!(app.frame().cursor, 4, "still on blog");
     press(&mut app, &[Key::Up, Key::Up, Key::Char('s')]);
     assert_eq!(app.frame().cursor, 2, "a header stays put");
+    press(&mut app, &[Key::Char('s')]);
+    assert_eq!(app.sort, Sort::Problems, "three orders, then back");
     press(&mut app, &[Key::Char('e')]);
     assert_eq!(app_rows(&app), ["[prod]", "[test]", "blog"], "all open, so all folded");
     press(&mut app, &[Key::Down, Key::Char('g')]);

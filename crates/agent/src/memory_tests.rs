@@ -134,6 +134,7 @@ fn reading(at: u64, cpu: Option<(u64, u64)>, rx: Option<u64>) -> Collected {
     let counters = Counters {
         cpu: cpu.map(|(busy, idle)| (at, CpuTimes { busy, idle, iowait: 0, steal: 0 })),
         net: rx.map(|rx| (at, [("eth0".to_string(), (rx, 0))].into())),
+        ..Counters::default()
     };
     Collected { host: Some((report.host_facts.unwrap(), state)), counters, ..pass(vec![]) }
 }
@@ -175,4 +176,77 @@ fn a_one_off_pass_measures_from_given_counters() {
     let mut pass = reading(10_100, Some((110, 110)), Some(500));
     Memory::starting_from(before).rates(&mut pass);
     assert_eq!(rates(&pass), (Some(50.0), Some(500)));
+}
+
+/// A pass with these workloads, each read at uptime `at` with `(service, instance, ns)`.
+fn cpu_pass(at: u64, services: &[&str], samples: &[(&str, &str, u64)]) -> Collected {
+    use crate::collect::host::CpuTimes;
+    let mut c = pass(services.iter().map(|s| workload(s, &[])).collect());
+    (c.counters.at, c.counters.cpu) = (Some(at), Some((at, CpuTimes::default())));
+    c.counters.workloads = samples
+        .iter()
+        .map(|(service, instance, ns)| {
+            let s = Sample { at, instance: instance.to_string(), ns: *ns };
+            (workload(service, &[]).key, s)
+        })
+        .collect();
+    c
+}
+
+fn cores_of(c: &Collected) -> Vec<Option<f32>> {
+    c.workloads.iter().map(|w| w.state.cpu_cores).collect()
+}
+
+#[test]
+fn a_workloads_cpu_comes_from_two_readings_of_the_same_run() {
+    let mut m = Memory::default();
+    let mut first = cpu_pass(10_000, &["api"], &[("api", "a", 0)]);
+    m.rates(&mut first);
+    assert_eq!(cores_of(&first), [None], "nothing to compare with yet");
+    let mut second = cpu_pass(16_000, &["api"], &[("api", "a", 30_000_000_000)]);
+    m.rates(&mut second);
+    assert_eq!(cores_of(&second), [Some(0.5)], "30 s of CPU in 60 s");
+    let mut restarted = cpu_pass(22_000, &["api"], &[("api", "b", 1_000_000_000)]);
+    m.rates(&mut restarted);
+    assert_eq!(cores_of(&restarted), [None], "a new run counts from zero");
+    let mut after = cpu_pass(28_000, &["api"], &[("api", "b", 7_000_000_000)]);
+    m.rates(&mut after);
+    assert_eq!(cores_of(&after), [Some(0.1)]);
+}
+
+#[test]
+fn a_reading_missed_is_kept_while_it_can_still_make_a_rate() {
+    let mut m = Memory::default();
+    m.rates(&mut cpu_pass(10_000, &["api"], &[("api", "a", 0)]));
+    let mut missed = cpu_pass(16_000, &["api"], &[]);
+    m.rates(&mut missed);
+    assert_eq!(cores_of(&missed), [None]);
+    let mut again = cpu_pass(20_000, &["api"], &[("api", "a", 10_000_000_000)]);
+    m.rates(&mut again);
+    assert_eq!(cores_of(&again), [Some(0.1)], "over 100 s, from the reading kept");
+    m.rates(&mut cpu_pass(80_001, &["api"], &[]));
+    let mut late = cpu_pass(81_000, &["api"], &[("api", "a", 20_000_000_000)]);
+    m.rates(&mut late);
+    assert_eq!(cores_of(&late), [None], "a reading over ten minutes old is gone");
+}
+
+#[test]
+fn a_running_workload_without_a_counter_is_reported_once() {
+    let mut m = Memory::default();
+    let c = pass(vec![workload("api", &[]), workload("web", &[])]);
+    assert!(c.workloads.iter().all(|w| w.state.run == skym_core::model::RunState::Running));
+    let keys = |ks: Vec<WorkloadKey>| ks.into_iter().map(|k| k.service).collect::<Vec<_>>();
+    assert_eq!(keys(m.uncounted(&c)), ["api", "web"]);
+    assert_eq!(keys(m.uncounted(&c)), Vec::<String>::new(), "said once");
+    let counted = crate::collect::host::Target {
+        key: workload("db", &[]).key,
+        instance: "x".into(),
+        cpu: crate::collect::cgroup::CpuFile::V2("/nonexistent".into()),
+    };
+    let c = Collected { targets: vec![counted], ..pass(vec![workload("db", &[])]) };
+    assert!(m.uncounted(&c).is_empty(), "one with a counter is not reported");
+    let gone = pass(vec![workload("web", &[])]);
+    m.uncounted(&gone);
+    let back = pass(vec![workload("api", &[]), workload("web", &[])]);
+    assert_eq!(keys(m.uncounted(&back)), ["api"], "forgotten once gone, so said again");
 }

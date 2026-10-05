@@ -7,7 +7,7 @@ use crate::memory::Memory;
 use crate::{report, status};
 use jiff::{SignedDuration, Timestamp};
 use skym_core::judge::{JudgeInput, Recent, judge};
-use skym_core::model::ExceptionGroup;
+use skym_core::model::{ExceptionGroup, RunState};
 use skym_core::report::{Report, validate};
 use skym_core::time::parse_since;
 use skym_core::view::{HostView, Status};
@@ -83,16 +83,18 @@ fn indent(s: &str) -> String {
     s.lines().map(|l| format!("    {l}")).collect::<Vec<_>>().join("\n")
 }
 
-/// The report a pass would send. Rates are measured over the second before it, so they
-/// show the host, not this pass's own work.
+/// The report a pass would send. Rates are measured over the second after it, so they show
+/// the host and its workloads, not this pass's own work.
 pub async fn report_dry_run(cfg: &Config) -> anyhow::Result<u8> {
-    let (before, _) = collect::host::counters();
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    let (after, _) = collect::host::counters();
     let now = Timestamp::now();
     let (host, mut c) = collect::once(cfg, now, now - cfg.interval, Detail::Report).await;
-    c.counters = after;
+    let before = c.counters.clone();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    (c.counters, _) = collect::host::counters(&c.targets);
     Memory::starting_from(before).rates(&mut c);
+    let running = c.workloads.iter().filter(|w| w.state.run == RunState::Running).count();
+    let read = c.counters.workloads.len();
+    eprintln!("cpu: {read}/{running} running workloads had their CPU time read");
     println!("{}", serde_json::to_string_pretty(&report::build(&c, &host, now))?);
     Ok(status::exit_code(Status::Ok, !c.errors.is_empty(), c.all_failed))
 }
