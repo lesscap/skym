@@ -5,27 +5,43 @@ description: Check the health of the hosts, containers and applications monitore
 
 # skym
 
-`SKYM_URL` and `SKYM_TOKEN` come from the environment; if unset, read them from `~/.config/skym/env`.
+A read-only JSON API over every watched host, its containers and systemd units (workloads), the applications they form, and the URLs probed for them. `SKYM_URL` and `SKYM_TOKEN` come from the environment, else from `~/.config/skym/env`.
 
 ```sh
 curl -fsS -H "Authorization: Bearer $SKYM_TOKEN" "$SKYM_URL/api/overview"
 ```
 
-`GET /api` lists every endpoint and its parameters.
+## Endpoints
 
-## How to read it
+- `/api/overview`: what is wrong now (`problems`), and every host in brief.
+- `/api/apps`, `/api/apps/{host}/{project}`: applications, their workloads, URLs, deploys and exception counts.
+- `/api/hosts`, `/api/hosts/{host}`: hosts, their resources, disks and workloads.
+- `/api/hosts/{host}/workloads/{project}/{service}`: one workload in full, with its recent events and exceptions.
+- `/api/timeline?host=…`: incident changes and events (deploys, restarts, OOM kills, reboots) by time.
+- `/api/incidents`: incident history, resolved and muted ones included on request.
+- `/api/exceptions?host=…`: failures applications reported, grouped, with a sample.
 
-1. Start at `/api/overview`. `problems` lists every open, unmuted incident, worst and oldest first; each names its application in `app` (none for a host's own: heartbeat, disks, logs). Name problems by their application, then the host. A workload's problem carries the workload (`workload`: image, ports, memory against its limit, restarts, a failing check's output), and each application its `workloads`, latest `deploys` and `exceptions_1h`: answer from these before following `links`. `hosts` (also `/api/hosts`) gives each machine's load, memory and disks, how busy its CPUs were since the last report (`cpu_percent`; high `iowait_percent` means waiting on disk, `steal_percent` on the hypervisor) and its network traffic. To say which application keeps a host busy, sum its `workloads[].cpu_cores` (CPUs kept busy, 1.5 = one and a half) from `/api/apps`. A host's `other_cpu_cores` and `other_memory_bytes` are what it uses outside its workloads (other processes, the kernel): when they are most of its use, say so and point at the host rather than at an application. A small `other_memory_bytes` does not prove nothing else uses memory: it is a lower bound. A URL of an application down (`ENDPOINT_DOWN`, `CERT_EXPIRING`) while its services are fine points at what lies between: a reverse proxy, DNS, a certificate.
-2. Asked which applications there are, or about one by name: start at `/api/apps`. Each has a `name`, an `env` and a `note` saying what it is; quote the note. Point out applications without an `env` or `note`, so someone describes them. Asked about a customer or a group, select by `tags` (on applications and hosts); about one machine, by the host in the application's `key` (`<host>/...`). `APP_MISSING` means a configured application has nothing running on its host.
-3. `HEARTBEAT_LOST` comes first: nothing else about that host is current. When the details say "all hosts silent", suspect the server or its network, not every host.
-4. Follow `links` to drill down (host → workload → timeline, exceptions, incidents); build a URL only from what `GET /api` lists.
-5. `open_for` is how long skym has seen a problem, not how long it has existed: when it is close to the host's `observed_since`, the problem predates skym. An incident's `since`, when present, is when it really began. Lead with problems that are new.
-6. Severity, thresholds and status are already judged: report them, do not re-derive them from raw numbers. `info` incidents are hygiene (e.g. unbounded logs): mention them last, briefly. `HEALTHCHECK_BROKEN` means the image's healthcheck cannot run (a missing `wget`, say): the service's health is unknown, so judge it by its URLs and the image's healthcheck is what to fix.
-7. Explain with the timeline: a `deployed` or `config_changed` event just before an incident is the first suspect.
-8. Exceptions: `/api/exceptions?host=…` groups failures by component and code; `business` ones are expected outcomes, not faults.
+Responses carry `links` to drill down; `GET /api` lists parameters. Fields, parameters and incident codes: [reference.md](reference.md).
 
-On a monitored host itself, `skym status --json` and `skym exceptions` give the same view without the server, in more detail.
+## Reading it
 
-Answer with what is wrong, since when, the likely cause, and what to look at next. Say so when everything is fine.
+- Times are UTC.
+- Severity and status are skym's verdicts: report them, do not re-derive them from raw numbers. `info` is hygiene, not a fault.
+- A host with `HEARTBEAT_LOST` has no current data. "All hosts silent" in its detail points at the server or its network.
+- `open_for` is how long skym has seen a problem; `since`, when present, is when it began, possibly before skym (`observed_since`) watched.
+- Muted incidents are known and accepted: they leave the overview (counted in `muted_count`) and count towards no status, so a muted workload may show `ok`.
+- `HEALTHCHECK_BROKEN`: the image's check cannot run, so the workload's health is unknown, not bad.
+- `business` exceptions are expected outcomes, not faults.
+- `other_cpu_cores` and `other_memory_bytes` are what a host uses outside its workloads; the memory is a lower bound.
 
-Running on a schedule to watch on your own, rather than answering? Read [watching.md](watching.md).
+## What skym cannot tell
+
+- History of CPU, memory or network: only the latest report is kept (disks keep a short series for the projection).
+- Logs: only grouped exception signals.
+- Processes, listening sockets, anything inside a container, or hosts it does not watch.
+- Who did something (a deploy, a restart): only what changed and when.
+- It cannot act: no restarts, no mutes (those live in the server configuration).
+
+Say so rather than guess, and point at the host itself. On a watched host, `skym status --json` and `skym exceptions` show the same view in more detail.
+
+Running on a schedule to watch on your own? Read [watching.md](watching.md).
