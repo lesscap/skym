@@ -24,5 +24,8 @@ serde_json.workspace = true
 tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
 unicode-width = "0.2"
 
+[dev-dependencies]
+skym-core = { path = "../core", features = ["fixtures"] }
+
 [lints]
 workspace = true

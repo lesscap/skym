@@ -1,9 +1,9 @@
 use super::*;
 use crate::apps::{Grouping, Sort};
+use skym_core::fixtures;
 use skym_core::rules::{IncidentCode, Severity};
 use skym_core::subject::{AppKey, Subject};
 use skym_core::view::{AppSummary, HostOverview, IncidentView, Status, WorkloadSummary};
-use std::collections::BTreeMap;
 
 fn t(sec: i64) -> Timestamp {
     Timestamp::from_second(1_790_000_000 + sec).unwrap()
@@ -11,59 +11,29 @@ fn t(sec: i64) -> Timestamp {
 
 /// An open, critical problem, attributed as the server does.
 fn incident(subject: &str) -> IncidentView {
-    let subject: Subject = subject.parse().unwrap();
+    let i = fixtures::incident(subject, IncidentCode::WorkloadDown, Severity::Critical);
     IncidentView {
-        app: match &subject {
+        app: match &i.subject {
             Subject::Workload(k) => Some(AppKey::of(k)),
             Subject::App(a) => Some(a.clone()),
             Subject::Endpoint(_) => Some("x/shop".parse().unwrap()),
             _ => None,
         },
-        subject,
-        code: IncidentCode::WorkloadDown,
-        severity: Severity::Critical,
         detail: "exited (1)".into(),
         opened_at: Some(t(0)),
-        since: None,
-        open_for: None,
-        resolved_at: None,
-        muted: false,
-        mute_reason: None,
-        links: BTreeMap::new(),
         observed_since: Some(t(0)),
-        workload: None,
+        ..i
     }
 }
 
 fn host(id: &str) -> HostOverview {
     HostOverview {
-        id: id.into(),
         status: Status::Critical,
-        last_report_ago: Some("5s".into()),
         observed_since: Some(t(0)),
-        info_count: 0,
-        incidents: vec![],
-        links: BTreeMap::new(),
         load_1m: Some(0.5),
-        memory_used_bytes: None,
-        memory_total_bytes: None,
-        disks: vec![],
         apps: 1,
         apps_in_trouble: 1,
-        os: None,
-        kernel: None,
-        arch: None,
-        cpu_count: None,
-        boot_time: None,
-        docker_version: None,
-        agent_version: None,
-        ip: None,
-        cpu_percent: None,
-        iowait_percent: None,
-        steal_percent: None,
-        net_rx_bytes_per_s: None,
-        net_tx_bytes_per_s: None,
-        tags: vec![],
+        ..fixtures::host_overview(id)
     }
 }
 
@@ -87,22 +57,12 @@ fn overview() -> Overview {
 
 fn summary(key: &str, env: Option<&str>, status: Status) -> AppSummary {
     AppSummary {
-        key: key.parse().unwrap(),
-        name: key.rsplit('/').next().unwrap().into(),
         env: env.map(String::from),
-        note: None,
         configured: env.is_some(),
         status,
         services: 1,
         running: 1,
-        last_deployed: None,
-        endpoints: vec![],
-        incidents: vec![],
-        links: BTreeMap::new(),
-        workloads: vec![],
-        deploys: vec![],
-        exceptions_1h: 0,
-        tags: vec![],
+        ..fixtures::app(key)
     }
 }
 
@@ -136,20 +96,8 @@ fn host_view() -> HostView {
 
 fn app_view(key: &str) -> AppView {
     let service = |name: &str, status| WorkloadSummary {
-        key: WorkloadKey { host: "x".into(), project: "app".into(), service: name.into() },
-        kind: None,
         status,
-        run: skym_core::model::RunState::Running,
-        exit_code: None,
-        state_since: None,
-        image: None,
-        links: BTreeMap::new(),
-        restart_policy: None,
-        ports: vec![],
-        memory_used_bytes: None,
-        memory_limit_bytes: None,
-        restarts_last_hour: 0,
-        health_output: None,
+        ..fixtures::workload(&format!("x/app/{name}"))
     };
     AppView {
         app: summary(key, None, Status::Critical),
@@ -231,11 +179,8 @@ fn a_host_lists_its_apps_and_an_app_its_services() {
     press(&mut app, &[Key::Esc]);
     let apps = |app: &App| app.host_apps().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
     assert_eq!(apps(&app), ["zz", "app"], "in the server's order: problems first");
-    let using: WorkloadSummary = serde_json::from_value(serde_json::json!({
-        "key": { "host": "x", "project": "app", "service": "web" },
-        "status": "ok", "run": "running", "memory_used_bytes": 1_000_000
-    }))
-    .unwrap();
+    let using =
+        WorkloadSummary { memory_used_bytes: Some(1_000_000), ..fixtures::workload("x/app/web") };
     app.host.value.as_mut().unwrap().apps[1].workloads = vec![using];
     press(&mut app, &[Key::Down, Key::Char('s')]);
     assert_eq!(app.frame().cursor, 0, "the selection follows its application");
@@ -387,13 +332,10 @@ fn the_applications_tab_groups_folds_and_leads_to_an_app() {
         apps: vec![
             shop,
             AppSummary {
-                workloads: vec![
-                    serde_json::from_value(serde_json::json!({
-                        "key": { "host": "y", "project": "shop-test", "service": "web" },
-                        "status": "ok", "run": "running", "memory_used_bytes": 1_000_000
-                    }))
-                    .unwrap(),
-                ],
+                workloads: vec![WorkloadSummary {
+                    memory_used_bytes: Some(1_000_000),
+                    ..fixtures::workload("y/shop-test/web")
+                }],
                 ..summary("y/shop-test", Some("test"), Status::Ok)
             },
             summary("x/blog", Some("test"), Status::Critical),

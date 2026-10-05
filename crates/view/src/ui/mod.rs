@@ -1,6 +1,7 @@
 //! Drawing. Every frame is drawn from the state alone; nothing here changes it.
 
 mod apps;
+mod format;
 mod host;
 mod hosts;
 mod preview;
@@ -10,7 +11,8 @@ mod workload;
 
 use crate::api::FetchError;
 use crate::app::{App, Screen, TABS};
-use crate::problems::Age;
+use crate::apps::Sort;
+use format::{age, ago, reason};
 use jiff::Timestamp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -18,7 +20,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use skym_core::rules::Severity;
-use skym_core::time::format_duration;
 use skym_core::view::{IncidentView, Status};
 
 /// Colors, unless `NO_COLOR` asks for none: then the symbols carry the meaning alone.
@@ -172,6 +173,12 @@ fn bottom_bar(app: &App, theme: Theme) -> Paragraph<'static> {
 }
 
 fn help(f: &mut Frame, theme: Theme) {
+    let labels = Sort::ALL.map(Sort::label);
+    let sorts = match labels.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{}, or {last}", rest.join(", ")),
+        _ => labels.join(""),
+    };
+    let sorts = format!("s          sort applications: {sorts}");
     let lines = [
         "↑↓ j k     move",
         "⏎          open / expand (a group of applications: open or fold)",
@@ -180,7 +187,7 @@ fn help(f: &mut Frame, theme: Theme) {
         "/          filter: words, host:<id> env:<env> tag:<tag> !ok",
         "t          timeline (host, service)",
         "e          exceptions (host); open or fold every group (applications)",
-        "s          sort applications: problems first, or most memory first",
+        sorts.as_str(),
         "g          group applications by environment, host or tag",
         "[ ]        timeline window: 6h 24h 7d",
         "h          show hygiene (info) problems",
@@ -230,42 +237,6 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(area.width);
     let h = height.min(area.height);
     Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
-}
-
-/// A time as the clock on the wall shows it.
-fn local(t: Timestamp, format: &str) -> String {
-    t.to_zoned(jiff::tz::TimeZone::system()).strftime(format).to_string()
-}
-
-/// `5m`, `3d4h`: how long ago.
-fn ago(now: Timestamp, then: Timestamp) -> String {
-    format_duration(now.duration_since(then))
-}
-
-fn age(a: Age) -> String {
-    match a {
-        Age::Exact(d) => format_duration(d),
-        Age::AtLeast(d) => format!("≥{}", format_duration(d)),
-    }
-}
-
-/// An incident's detail without Docker's boilerplate, which would push the cause out of
-/// a narrow column.
-fn reason(detail: &str) -> String {
-    detail.replace("OCI runtime exec failed: exec failed: unable to start container process: ", "")
-}
-
-fn event(kind: &skym_core::model::EventKind) -> String {
-    use skym_core::model::EventKind;
-    match kind {
-        EventKind::Deployed { from, to } => format!("deployed {to} (was {from})"),
-        EventKind::ConfigChanged => "configuration changed".into(),
-        EventKind::Restarted => "restarted".into(),
-        EventKind::OomKilled => "OOM killed".into(),
-        EventKind::HostRebooted => "host rebooted".into(),
-        EventKind::KernelChanged => "kernel changed".into(),
-        EventKind::Unknown => "(an event this version does not know)".into(),
-    }
 }
 
 /// Listed in a problems table: muted and hygiene ones only once asked for.

@@ -50,7 +50,7 @@ impl Filter {
             env: Some(a.env.as_deref()),
             tags: Some(&a.tags),
             status: Some(a.status),
-            text: crate::apps::text(a),
+            text: text(a),
         })
     }
 
@@ -102,5 +102,28 @@ impl Filter {
             Term::Trouble => row.status.is_none_or(|s| s != Status::Ok),
             Term::Text(w) => row.text.to_lowercase().contains(w.as_str()),
         })
+    }
+}
+
+/// What the filter matches: the name, where it runs, its URLs, its note and its tags.
+fn text(a: &AppSummary) -> String {
+    let urls: Vec<&str> = a.endpoints.iter().map(|e| e.url.as_str()).collect();
+    let note = a.note.as_deref().unwrap_or("");
+    format!("{} {} {} {note} {}", a.name, a.key, urls.join(" "), a.tags.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skym_core::fixtures;
+
+    #[test]
+    fn the_filter_reads_names_hosts_urls_notes_and_tags() {
+        let a = AppSummary {
+            note: Some("the web shop".into()),
+            tags: vec!["acme".into(), "eu".into()],
+            ..fixtures::app("x/shop")
+        };
+        assert_eq!(text(&a), "shop x/shop  the web shop acme eu");
     }
 }

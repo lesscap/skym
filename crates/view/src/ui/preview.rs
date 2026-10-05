@@ -1,6 +1,7 @@
 //! The preview under (or beside) a list: what the selected row is, without opening it.
 
-use super::{Theme, ago, local, reason};
+use super::Theme;
+use super::format::{ago, answer, app_count, cpu_use, local, memory, rate, reason, size, usage};
 use crate::app::App;
 use crate::apps::{self, Group, UNCLASSIFIED};
 use crate::problems::{Age, Row};
@@ -9,30 +10,6 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use skym_core::view::{AppSummary, DiskUse, HostOverview, Status, WorkloadSummary};
 use unicode_width::UnicodeWidthChar;
-
-/// `80G`, `512M`, `3.2T`.
-pub fn size(bytes: u64) -> String {
-    let units = [("T", 1e12), ("G", 1e9), ("M", 1e6)];
-    let b = bytes as f64;
-    match units.iter().find(|(_, scale)| b >= *scale) {
-        // One decimal below 10 (as it will be printed), none from there.
-        Some((unit, scale)) if (b / scale * 10.0).round() >= 100.0 => {
-            format!("{:.0}{unit}", b / scale)
-        }
-        Some((unit, scale)) => format!("{:.1}{unit}", b / scale),
-        None => format!("{}K", bytes / 1000),
-    }
-}
-
-/// `1.4 / 3.9 GB`.
-pub fn memory(used: Option<u64>, total: Option<u64>) -> String {
-    let gb = |b: u64| format!("{:.1}", b as f64 / 1e9);
-    match (used, total) {
-        (Some(used), Some(total)) => format!("{} / {} GB", gb(used), gb(total)),
-        (Some(used), None) => format!("{} GB", gb(used)),
-        _ => "—".into(),
-    }
-}
 
 /// Where a preview line's text starts, past its label.
 const INDENT: usize = 10;
@@ -91,11 +68,6 @@ fn styled(cells: &[(char, Style)]) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// `120M / 512M`, or `120M` without a limit.
-pub fn usage(used: u64, limit: Option<u64>) -> String {
-    limit.map_or_else(|| size(used), |l| format!("{} / {}", size(used), size(l)))
-}
-
 pub fn label(text: &str, theme: Theme) -> Span<'static> {
     Span::styled(format!(" {text:<9}"), theme.dim())
 }
@@ -118,26 +90,6 @@ fn top_memory(apps: &[&AppSummary], theme: Theme) -> Option<Line<'static>> {
     }
     (!parts.is_empty())
         .then(|| Line::from(vec![label("top mem", theme), Span::raw(parts.join(" · "))]))
-}
-
-/// `1 app`, `43 apps`.
-pub fn app_count(n: usize) -> String {
-    if n == 1 { "1 app".into() } else { format!("{n} apps") }
-}
-
-/// `23% busy · 4% iowait · load 0.93`; steal only from 1%, when a neighbour on the
-/// hypervisor is taking time.
-fn cpu_use(h: &HostOverview) -> String {
-    let parts: Vec<String> = [
-        h.cpu_percent.map(|p| format!("{p:.0}% busy")),
-        h.iowait_percent.map(|p| format!("{p:.0}% iowait")),
-        h.steal_percent.filter(|p| *p >= 1.0).map(|p| format!("{p:.0}% steal")),
-        Some(h.load_1m.map_or("load —".into(), |l| format!("load {l:.2}"))),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    parts.join(" · ")
 }
 
 /// `tags     acme · billing`, when it has any.
@@ -186,7 +138,7 @@ pub fn problem(app: &App, r: &Row, now: Timestamp, theme: Theme) -> Vec<Line<'st
         _ => String::new(),
     };
     lines.push(Line::from(vec![label("since", theme), Span::raw(format!("{opened}{watched}"))]));
-    match r.app().and_then(|k| app.apps.value.iter().flat_map(|l| &l.apps).find(|a| a.key == *k)) {
+    match r.app().and_then(|k| app.app_summary(k)) {
         Some(a) => lines.push(Line::from(vec![label("app", theme), Span::raw(app_line(a))])),
         None if r.app().is_none() => lines.push(Line::from(vec![
             label("app", theme),
@@ -200,8 +152,7 @@ pub fn problem(app: &App, r: &Row, now: Timestamp, theme: Theme) -> Vec<Line<'st
             lines.push(Line::from(vec![label("health", theme), Span::raw(reason(out))]));
         }
     }
-    let host = app.overview.value.iter().flat_map(|o| &o.hosts).find(|h| h.id == r.host);
-    if let Some(h) = host {
+    if let Some(h) = app.host_summary(r.host) {
         lines.push(Line::from(vec![label("host", theme), Span::raw(host_line(h, now))]));
     }
     lines
@@ -273,11 +224,7 @@ pub fn app_head(a: &AppSummary, theme: Theme) -> Vec<Line<'static>> {
     }
     lines.extend(tags(&a.tags, theme));
     for e in &a.endpoints {
-        let answer = match (e.http_status, e.latency_ms) {
-            (Some(s), Some(ms)) => format!("{s} in {ms}ms"),
-            _ if e.last_probe_ago.is_none() => "not probed yet".into(),
-            _ => "no answer".into(),
-        };
+        let answer = answer(e, true);
         let cert = e
             .cert_expires_at
             .map_or(String::new(), |t| format!(" · cert until {}", local(t, "%Y-%m-%d")));
@@ -352,17 +299,12 @@ pub fn host_body(app: &App, h: &HostOverview, now: Timestamp, theme: Theme) -> V
         ]),
     ];
     if let (Some(rx), Some(tx)) = (h.net_rx_bytes_per_s, h.net_tx_bytes_per_s) {
-        let rate = |b: u64| match b {
-            0..1000 => format!("{b}B/s"),
-            _ => format!("{}B/s", size(b)),
-        };
         lines.push(Line::from(vec![
             label("net", theme),
             Span::raw(format!("↓ {}  ↑ {}", rate(rx), rate(tx))),
         ]));
     }
-    let on_host: Vec<&AppSummary> =
-        app.apps.value.iter().flat_map(|l| &l.apps).filter(|a| a.key.host == h.id).collect();
+    let on_host: Vec<&AppSummary> = app.apps_iter().filter(|a| a.key.host == h.id).collect();
     lines.extend(tags(&h.tags, theme));
     lines.extend(h.disks.iter().map(|d| disk_line(d, theme)));
     let troubled: Vec<String> =
@@ -431,22 +373,5 @@ mod tests {
         // 10 + 12 cells fit, `· 服务两个` would make 33: break before the separator.
         assert_eq!(wrapped[0].to_string(), " note     学习平台后台");
         assert_eq!(wrapped[1].to_string(), "          服务两个 · 每天部署");
-    }
-
-    #[test]
-    fn sizes_read_at_a_glance() {
-        assert_eq!(size(80_000_000_000), "80G");
-        assert_eq!(size(3_200_000_000_000), "3.2T");
-        assert_eq!(size(512_000_000), "512M");
-        assert_eq!(size(1_500_000_000), "1.5G");
-        assert_eq!(size(9_999_000), "10M", "rounded up to ten, so no decimal");
-        assert_eq!(size(9_940_000), "9.9M");
-        assert_eq!(size(4_000), "4K");
-        assert_eq!(memory(Some(1_400_000_000), Some(3_900_000_000)), "1.4 / 3.9 GB");
-        assert_eq!(memory(None, Some(1)), "—");
-        assert_eq!(
-            (usage(120_000_000, Some(512_000_000)), usage(120_000_000, None)),
-            ("120M / 512M".into(), "120M".into())
-        );
     }
 }

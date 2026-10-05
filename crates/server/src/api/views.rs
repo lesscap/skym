@@ -12,7 +12,7 @@ use skym_core::subject::{AppKey, HostId, Subject, WorkloadKey, encode};
 use skym_core::time::format_duration;
 use skym_core::view::{
     AppSummary, CustomerOverview, DiskUse, EndpointOverview, HostOverview, HostView, IncidentView,
-    Overview, Status, Timeline, TimelineEntry, TimelineKind, WorkloadView, rollup,
+    Overview, Status, Timeline, TimelineEntry, TimelineKind, WorkloadSummary, WorkloadView, rollup,
     workload_summary,
 };
 use std::collections::BTreeMap;
@@ -81,6 +81,12 @@ pub fn app_of(subject: &Subject, probed: &[Endpoint]) -> Option<AppKey> {
     }
 }
 
+/// A workload with its links, its status judged by `incidents`.
+pub fn summary(w: &WorkloadRow, incidents: &[IncidentView]) -> WorkloadSummary {
+    let links = links(&Subject::Workload(w.key.clone()));
+    workload_summary(w.key.clone(), w.facts.as_ref(), &w.state, incidents, links)
+}
+
 /// Where to look next, so an agent never builds URLs itself.
 pub fn links(subject: &Subject) -> BTreeMap<String, String> {
     let host_links = |h: &str| {
@@ -133,13 +139,7 @@ pub fn host(
     apps: Vec<AppSummary>,
     now: Timestamp,
 ) -> HostView {
-    let workloads = workloads
-        .into_iter()
-        .map(|w| {
-            let links = links(&Subject::Workload(w.key.clone()));
-            workload_summary(w.key, w.facts.as_ref(), &w.state, &incidents, links)
-        })
-        .collect();
+    let workloads = workloads.into_iter().map(|w| summary(&w, &incidents)).collect();
     HostView {
         status: status(&incidents, row.is_some()),
         last_report_ago: row.as_ref().map(|r| format_duration(now.duration_since(r.last_seen))),

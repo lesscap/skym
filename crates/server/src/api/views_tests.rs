@@ -168,22 +168,11 @@ fn row(id: &str, seen: i64) -> HostRow {
 
 fn summary(key: &str, status: Status) -> AppSummary {
     AppSummary {
-        key: key.parse().unwrap(),
         name: key.into(),
-        env: None,
-        note: None,
-        configured: false,
         status,
         services: 1,
         running: 1,
-        last_deployed: None,
-        endpoints: vec![],
-        incidents: vec![],
-        links: BTreeMap::new(),
-        workloads: vec![],
-        deploys: vec![],
-        exceptions_1h: 0,
-        tags: vec![],
+        ..skym_core::fixtures::app(key)
     }
 }
 
@@ -192,8 +181,7 @@ fn the_overview_lists_problems_flat_and_hosts_by_urgency() {
     let host = |id: &str, customer: Option<&str>| HostEntry {
         id: id.into(),
         customer: customer.map(String::from),
-        token_sha256: String::new(),
-        tags: vec![],
+        ..HostEntry::default()
     };
     let cfg = ServerConfig {
         customers: vec![Customer { id: "acme".into(), name: "Acme".into() }],

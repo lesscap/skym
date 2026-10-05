@@ -15,7 +15,7 @@ use skym_core::subject::{AppKey, Subject, WorkloadKey};
 use skym_core::time::parse_since;
 use skym_core::view::{
     AppList, AppView, ExceptionList, HostList, HostView, IncidentList, IncidentView, Overview,
-    Timeline, WorkloadView, workload_summary,
+    Timeline, WorkloadView,
 };
 
 type ApiResult<T> = Result<Json<T>, ApiError>;
@@ -262,14 +262,7 @@ async fn one_app(s: AppState, key: AppKey) -> ApiResult<AppView> {
         .into_iter()
         .find(|a| a.key == key)
         .ok_or_else(|| ApiError::not_found(format!("app {key} is unknown")))?;
-    let workloads = snap
-        .workloads
-        .into_iter()
-        .filter(|w| key.contains(&w.key))
-        .map(|w| {
-            let links = views::links(&Subject::Workload(w.key.clone()));
-            workload_summary(w.key, w.facts.as_ref(), &w.state, &app.incidents, links)
-        })
-        .collect();
+    // The same workloads as the application's own, problems first.
+    let workloads = app.workloads.clone();
     Ok(Json(AppView { app, workloads }))
 }

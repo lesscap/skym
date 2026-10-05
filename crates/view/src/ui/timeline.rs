@@ -1,6 +1,7 @@
 //! What happened, newest first: incidents and events, deployments stand out.
 
-use super::{Theme, block, empty_row, event, local};
+use super::format::{event, local};
+use super::{Theme, block, empty_row};
 use crate::app::{App, Screen, WINDOWS};
 use crate::names::short;
 use ratatui::Frame;

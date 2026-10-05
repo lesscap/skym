@@ -1,8 +1,8 @@
 //! The applications page: grouped by environment, host or tag, each group folded to its
 //! applications in trouble unless opened. Pure.
 
-use skym_core::view::{AppSummary, Status};
-use std::cmp::Reverse;
+use skym_core::view::{AppSummary, Status, WorkloadSummary};
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The usual environments, in this order; any other comes after them, unset last.
@@ -46,7 +46,7 @@ impl Grouping {
     }
 }
 
-/// How applications are ordered: worst first, or by the memory they use.
+/// How applications are ordered: worst first, or by what they use.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Sort {
     #[default]
@@ -54,15 +54,52 @@ pub enum Sort {
     Memory,
 }
 
-/// The memory its workloads report, if any does.
+impl Sort {
+    /// Every order, in the order `s` goes through them.
+    pub const ALL: [Sort; 2] = [Sort::Problems, Sort::Memory];
+
+    pub fn next(self) -> Sort {
+        let at = Sort::ALL.iter().position(|s| *s == self).unwrap_or(0);
+        Sort::ALL[(at + 1) % Sort::ALL.len()]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Sort::Problems => "problems first",
+            Sort::Memory => "most memory first",
+        }
+    }
+
+    /// The column it sorts by, which carries the `▼`.
+    pub fn column(self) -> Option<&'static str> {
+        match self {
+            Sort::Problems => None,
+            Sort::Memory => Some("MEM"),
+        }
+    }
+
+    /// Worst first; or the most used first, those reporting none last.
+    pub fn order(self, a: &AppSummary, b: &AppSummary) -> Ordering {
+        match self {
+            Sort::Problems => b.status.cmp(&a.status),
+            Sort::Memory => used_memory(b).cmp(&used_memory(a)),
+        }
+    }
+}
+
+/// What an application's workloads report of one resource, summed; `None` if none does.
+fn used(a: &AppSummary, of: impl Fn(&WorkloadSummary) -> Option<u64>) -> Option<u64> {
+    a.workloads.iter().filter_map(of).reduce(|x, y| x + y)
+}
+
 pub fn used_memory(a: &AppSummary) -> Option<u64> {
-    a.workloads.iter().filter_map(|w| w.memory_used_bytes).reduce(|x, y| x + y)
+    used(a, |w| w.memory_used_bytes)
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Group<'a> {
     pub name: String,
-    /// All of its applications, worst first, then by name.
+    /// All of its applications, in the chosen order, then by name.
     pub all: Vec<&'a AppSummary>,
     pub open: bool,
 }
@@ -102,13 +139,7 @@ pub fn groups<'a>(
     let mut groups: Vec<Group> = named
         .into_iter()
         .map(|(name, mut all)| {
-            all.sort_by(|a, b| {
-                let first = match sort {
-                    Sort::Problems => b.status.cmp(&a.status),
-                    Sort::Memory => used_memory(b).cmp(&used_memory(a)),
-                };
-                first.then_with(|| a.name.cmp(&b.name))
-            });
+            all.sort_by(|a, b| sort.order(a, b).then_with(|| a.name.cmp(&b.name)));
             let open = open.contains(&(by, name.clone()));
             Group { name, all, open }
         })
@@ -126,36 +157,19 @@ pub fn groups<'a>(
     groups
 }
 
-/// What the filter matches: the name, where it runs, its URLs, its note and its tags.
-pub fn text(a: &AppSummary) -> String {
-    let urls: Vec<&str> = a.endpoints.iter().map(|e| e.url.as_str()).collect();
-    let note = a.note.as_deref().unwrap_or("");
-    format!("{} {} {} {note} {}", a.name, a.key, urls.join(" "), a.tags.join(" "))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use skym_core::fixtures;
 
     fn app(name: &str, env: Option<&str>, status: Status) -> AppSummary {
         AppSummary {
-            key: format!("x/{name}").parse().unwrap(),
-            name: name.into(),
             env: env.map(String::from),
-            note: None,
             configured: env.is_some(),
             status,
             services: 1,
             running: 1,
-            last_deployed: None,
-            endpoints: vec![],
-            incidents: vec![],
-            links: BTreeMap::new(),
-            workloads: vec![],
-            deploys: vec![],
-            exceptions_1h: 0,
-            tags: vec![],
+            ..fixtures::app(&format!("x/{name}"))
         }
     }
 
@@ -242,12 +256,9 @@ mod tests {
 
     /// An application whose workloads report these amounts of memory (`None`: not reported).
     fn using(name: &str, status: Status, memory: &[Option<u64>]) -> AppSummary {
-        let workload = |m: &Option<u64>| {
-            serde_json::from_value(serde_json::json!({
-                "key": { "host": "x", "project": name, "service": "s" },
-                "status": "ok", "run": "running", "memory_used_bytes": m
-            }))
-            .unwrap()
+        let workload = |m: &Option<u64>| WorkloadSummary {
+            memory_used_bytes: *m,
+            ..fixtures::workload(&format!("x/{name}/s"))
         };
         AppSummary {
             workloads: memory.iter().map(workload).collect(),
@@ -284,13 +295,5 @@ mod tests {
         );
         let silent = groups(&apps[1..3], Grouping::Env, Sort::Memory, &open, |_| true);
         assert_eq!(silent[0].memory(), None);
-    }
-
-    #[test]
-    fn the_filter_reads_names_hosts_urls_notes_and_tags() {
-        let mut a = app("shop", Some("prod"), Status::Ok);
-        a.note = Some("the web shop".into());
-        a.tags = vec!["acme".into(), "eu".into()];
-        assert_eq!(text(&a), "shop x/shop  the web shop acme eu");
     }
 }
