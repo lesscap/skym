@@ -33,7 +33,6 @@ fn overview(x: Vec<IncidentView>, y: Vec<IncidentView>) -> Overview {
     Overview {
         ts: t(0),
         status: Status::Critical,
-        customers: vec![],
         muted_count: 0,
         problems: x.into_iter().chain(y).collect(),
         hosts: vec![],

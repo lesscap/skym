@@ -59,7 +59,7 @@ Hosts and applications take `tags` (lowercase letters, digits, `.`, `_` and `-`)
 
 ### Probes
 
-The server probes every `[[apps.probes]]` URL from its own host, once per report interval: whether it answers (by default with a status below 400, else one in `expect`), and when its certificate expires. Every URL belongs to an application, so its problems show as that application's. See the examples in [`deploy/server.example.toml`](../deploy/server.example.toml) and the [judgement rules](judgement.md). (Standalone `[[endpoints]]` and `[[customers]]` from earlier versions: move each URL under its application's probes; `customers` and a host's `customer` are ignored.)
+The server probes every `[[apps.probes]]` URL from its own host, once per report interval: whether it answers (by default with a status below 400, else one in `expect`), and when its certificate expires. Every URL belongs to an application, so its problems show as that application's. See the examples in [`deploy/server.example.toml`](../deploy/server.example.toml) and the [judgement rules](judgement.md). (From earlier versions: move each standalone `[[endpoints]]` URL under its application's probes, and replace `[[customers]]` and a host's `customer` with `tags`. A configuration that still has them does not load, and says which.)
 
 For an application you run, a URL made for probing tells more than its home page:
 

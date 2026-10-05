@@ -5,7 +5,7 @@ use crate::model::{
     WorkloadState,
 };
 use crate::rules::{IncidentCode, Severity};
-use crate::subject::{AppKey, CustomerId, HostId, Subject, WorkloadKey};
+use crate::subject::{AppKey, HostId, Subject, WorkloadKey};
 use crate::time::Timestamp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -124,7 +124,6 @@ pub struct WorkloadSummary {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct HostView {
     pub id: HostId,
-    pub customer: Option<CustomerId>,
     pub status: Status,
     pub last_report_ago: Option<String>,
     /// When skym first heard from the host: incidents open about that long may be older.
@@ -247,25 +246,11 @@ pub struct EndpointOverview {
     pub app: Option<AppKey>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
-pub struct CustomerOverview {
-    pub id: CustomerId,
-    pub name: String,
-    pub status: Status,
-    #[serde(default)]
-    pub hosts: Vec<HostOverview>,
-    #[serde(default)]
-    pub endpoints: Vec<EndpointOverview>,
-}
-
 /// `GET /api/overview`: where is something wrong right now.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct Overview {
     pub ts: Timestamp,
     pub status: Status,
-    /// Grouped by customer, for views older than `problems` and `hosts`; to be removed.
-    #[serde(default)]
-    pub customers: Vec<CustomerOverview>,
     #[serde(default)]
     pub muted_count: u32,
     /// Open, unmuted incidents of every host and application.

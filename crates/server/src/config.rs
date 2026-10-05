@@ -6,7 +6,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use skym_core::rules::IncidentCode;
-use skym_core::subject::{AppKey, CustomerId, EXTERNAL, HostId, Subject};
+use skym_core::subject::{AppKey, EXTERNAL, HostId, Subject};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
@@ -19,8 +19,6 @@ pub struct ServerConfig {
     pub database: PathBuf,
     /// Must match the agents' interval: heartbeat timeout is three of them.
     pub report_interval: SignedDuration,
-    /// Optional, kept for the per-customer grouping older views read; tags will replace it.
-    pub customers: Vec<Customer>,
     pub hosts: Vec<HostEntry>,
     pub readers: Vec<Reader>,
     pub mute: Vec<Mute>,
@@ -35,7 +33,6 @@ impl Default for ServerConfig {
             listen: ([127, 0, 0, 1], 7280).into(),
             database: "/var/lib/skym-server/skym.db".into(),
             report_interval: SignedDuration::from_secs(60),
-            customers: Vec::new(),
             hosts: Vec::new(),
             readers: Vec::new(),
             mute: Vec::new(),
@@ -45,17 +42,9 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct Customer {
-    pub id: CustomerId,
-    pub name: String,
-}
-
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct HostEntry {
     pub id: HostId,
-    #[serde(default)]
-    pub customer: Option<CustomerId>,
     pub token_sha256: String,
     /// Tags for filtering and grouping; its applications inherit them.
     #[serde(default)]
@@ -171,8 +160,24 @@ pub fn parse(text: &str) -> anyhow::Result<ServerConfig> {
         let line = e.span().map(|s| text[..s.start].lines().count().max(1));
         anyhow::anyhow!("{} (line {})", e.message(), line.map_or("?".into(), |l| l.to_string()))
     })?;
+    reject_customers(text)?;
     validate(&cfg)?;
     Ok(cfg)
+}
+
+/// Customers gave way to tags: a configuration that still has them says so, instead of
+/// silently losing its grouping.
+fn reject_customers(text: &str) -> anyhow::Result<()> {
+    let Ok(table) = text.parse::<toml::Table>() else { return Ok(()) };
+    let hosts = table.get("hosts").and_then(|h| h.as_array()).into_iter().flatten();
+    let in_a_host = hosts.filter_map(|h| h.get("customer")).next().is_some();
+    if table.contains_key("customers") || in_a_host {
+        bail!(
+            "[[customers]] and a host's customer are no longer read: tag the hosts instead \
+             (tags = [\"<customer>\"])"
+        );
+    }
+    Ok(())
 }
 
 fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
@@ -185,14 +190,10 @@ fn validate(cfg: &ServerConfig) -> anyhow::Result<()> {
              application (an external application, id = \"external/<name>\", for third-party URLs)"
         );
     }
-    let customers: BTreeSet<&str> = cfg.customers.iter().map(|c| c.id.as_str()).collect();
     let mut ids = BTreeSet::new();
     for h in &cfg.hosts {
         if h.id.is_empty() || h.id.contains(['/', ':']) || h.id == EXTERNAL || !ids.insert(&h.id) {
             bail!("host id {:?} is empty, contains / or :, is \"external\" or is repeated", h.id);
-        }
-        if let Some(c) = h.customer.as_ref().filter(|c| !customers.contains(c.as_str())) {
-            bail!("host {:?} names unknown customer {c:?}", h.id);
         }
     }
     let hashes = cfg
@@ -290,12 +291,8 @@ mod tests {
         c.to_string().repeat(64)
     }
 
-    fn config(hosts: &str) -> String {
-        format!("[[customers]]\nid = \"acme\"\nname = \"Acme\"\n{hosts}")
-    }
-
-    fn host(id: &str, customer: &str, h: &str) -> String {
-        format!("[[hosts]]\nid = \"{id}\"\ncustomer = \"{customer}\"\ntoken_sha256 = \"{h}\"\n")
+    fn host(id: &str, h: &str) -> String {
+        format!("[[hosts]]\nid = \"{id}\"\ntoken_sha256 = \"{h}\"\n")
     }
 
     #[test]
@@ -303,7 +300,7 @@ mod tests {
         let reader = format!("[[readers]]\nname = \"ops\"\ntoken_sha256 = \"{}\"\n", hash('b'));
         let mute =
             "[[mute]]\nsubject = \"workload:x/legacy/worker\"\ncode = \"WORKLOAD_UNHEALTHY\"\n";
-        let cfg = parse(&config(&(host("x", "acme", &hash('a')) + &reader + mute))).unwrap();
+        let cfg = parse(&(host("x", &hash('a')) + &reader + mute)).unwrap();
         assert_eq!(cfg.report_interval, SignedDuration::from_secs(60));
         assert_eq!((cfg.hosts.len(), cfg.readers.len(), cfg.mute.len()), (1, 1, 1));
     }
@@ -313,15 +310,14 @@ mod tests {
         let reader_same =
             format!("[[readers]]\nname = \"ops\"\ntoken_sha256 = \"{}\"\n", hash('a'));
         let cases = [
-            config(&(host("x", "acme", &hash('a')) + &host("x", "acme", &hash('b')))),
-            config(&host("a/b", "acme", &hash('a'))),
-            config(&host("x", "nobody", &hash('a'))),
-            config(&host("x", "acme", "short")),
-            config(&host("x", "acme", &hash('A'))),
-            config(&(host("x", "acme", &hash('a')) + &reader_same)),
-            config("[[mute]]\nsubject = \"nonsense\"\ncode = \"WORKLOAD_DOWN\"\n"),
-            config("[[mute]]\nsubject = \"host:x\"\ncode = \"NOT_A_CODE\"\n"),
-            format!("report_interval = \"0s\"\n{}", config("")),
+            (host("x", &hash('a')) + &host("x", &hash('b'))),
+            host("a/b", &hash('a')),
+            host("x", "short"),
+            host("x", &hash('A')),
+            (host("x", &hash('a')) + &reader_same),
+            "[[mute]]\nsubject = \"nonsense\"\ncode = \"WORKLOAD_DOWN\"\n".to_string(),
+            "[[mute]]\nsubject = \"host:x\"\ncode = \"NOT_A_CODE\"\n".to_string(),
+            "report_interval = \"0s\"\n".to_string(),
         ];
         for (i, text) in cases.iter().enumerate() {
             assert!(parse(text).is_err(), "case {i} should be rejected");
@@ -329,7 +325,7 @@ mod tests {
     }
 
     fn with_app(app: &str) -> String {
-        config(&(host("x", "acme", &hash('a')) + app))
+        host("x", &hash('a')) + app
     }
 
     /// One probe of app x/shop with these fields.
@@ -367,10 +363,18 @@ mod tests {
     }
 
     #[test]
-    fn customers_are_optional_and_endpoints_point_to_apps() {
-        let bare = format!("[[hosts]]\nid = \"x\"\ntoken_sha256 = \"{}\"\n", hash('a'));
-        assert!(parse(&bare).unwrap().hosts[0].customer.is_none());
-        let old = with_app("[[endpoints]]\nurl = \"https://a.example/\"\ncustomer = \"acme\"\n");
+    fn customers_and_endpoints_from_older_versions_are_named() {
+        for old in [
+            (format!("[[customers]]\nid = \"acme\"\nname = \"Acme\"\n{}", host("x", &hash('a')))),
+            format!(
+                "[[hosts]]\nid = \"x\"\ncustomer = \"acme\"\ntoken_sha256 = \"{}\"\n",
+                hash('a')
+            ),
+        ] {
+            let err = format!("{:#}", parse(&old).unwrap_err());
+            assert!(err.contains("customers") && err.contains("tags"), "{err}");
+        }
+        let old = with_app("[[endpoints]]\nurl = \"https://a.example/\"\n");
         let err = format!("{:#}", parse(&old).unwrap_err());
         assert!(err.contains("[[apps.probes]]") && err.contains("external"), "{err}");
     }
@@ -404,8 +408,7 @@ mod tests {
             with_app("[[apps]]\nid = \"y/shop\"\n"),
             with_app("[[apps]]\nid = \"x/shop\"\n[[apps]]\nid = \"x/shop\"\n"),
             with_app("[[apps]]\nid = \"external/partner\"\n"),
-            config(&host("external", "acme", &hash('a'))),
-            config(&host("x", "nobody", &hash('a'))),
+            host("external", &hash('a')),
             with_app("[[mute]]\nsubject = \"queue:mail\"\ncode = \"WORKLOAD_DOWN\"\n"),
             probe("url = \"not a url\""),
             probe("url = \"ftp://shop.example.com/\""),
@@ -440,9 +443,9 @@ mod tests {
     fn load_reads_and_validates_a_file() {
         let path =
             std::env::temp_dir().join(format!("skym-server-test-{}.toml", std::process::id()));
-        std::fs::write(&path, config(&host("x", "acme", &hash('a')))).unwrap();
+        std::fs::write(&path, host("x", &hash('a'))).unwrap();
         assert_eq!(load(&path).unwrap().hosts[0].id, "x");
-        std::fs::write(&path, config(&host("x", "nobody", &hash('a')))).unwrap();
+        std::fs::write(&path, host("a/b", &hash('a'))).unwrap();
         assert!(load(&path).is_err());
         std::fs::remove_file(&path).unwrap();
         assert!(load(&path).is_err(), "a missing file is an error");

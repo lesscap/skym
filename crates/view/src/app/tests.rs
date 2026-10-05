@@ -43,7 +43,6 @@ fn overview() -> Overview {
     Overview {
         ts: t(0),
         status: Status::Critical,
-        customers: vec![],
         muted_count: 0,
         problems: vec![
             incident("app:x/gone"),

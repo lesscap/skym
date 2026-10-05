@@ -50,7 +50,6 @@ fn overview() -> Overview {
     Overview {
         ts: t(0),
         status: Status::Critical,
-        customers: vec![],
         muted_count: 0,
         problems: vec![
             incident("workload:x/app/old", IncidentCode::WorkloadUnhealthy, Severity::Critical, 1),

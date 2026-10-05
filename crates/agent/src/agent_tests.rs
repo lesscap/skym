@@ -5,7 +5,7 @@ use super::*;
 use crate::config::DockerConfig;
 use jiff::SignedDuration;
 use skym_server::api::{AppState, router};
-use skym_server::config::{Customer, HostEntry, ServerConfig, sha256_hex};
+use skym_server::config::{HostEntry, ServerConfig, sha256_hex};
 use skym_server::db;
 use skym_server::store::{Store, hosts};
 use std::net::SocketAddr;
@@ -18,13 +18,7 @@ const TOKEN: &str = "host-x-token";
 
 fn state() -> AppState {
     let cfg = ServerConfig {
-        customers: vec![Customer { id: "acme".into(), name: "Acme".into() }],
-        hosts: vec![HostEntry {
-            id: "x".into(),
-            customer: None,
-            token_sha256: sha256_hex(TOKEN),
-            tags: vec![],
-        }],
+        hosts: vec![HostEntry { id: "x".into(), token_sha256: sha256_hex(TOKEN), tags: vec![] }],
         ..ServerConfig::default()
     };
     AppState::new(Store::new(db::open_in_memory().unwrap()), cfg, Timestamp::now())

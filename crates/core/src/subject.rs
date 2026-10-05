@@ -3,7 +3,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::{borrow::Cow, fmt, str::FromStr};
 
 pub type HostId = String;
-pub type CustomerId = String;
 
 /// Stable identity of a workload across container recreation.
 ///

@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{Customer, Endpoint, Headers, HostEntry};
+use crate::config::{Endpoint, Headers, HostEntry};
 use crate::probe::Probe;
 use skym_core::model::EventKind;
 use skym_core::rules::{IncidentCode, Severity};
@@ -178,14 +178,9 @@ fn summary(key: &str, status: Status) -> AppSummary {
 
 #[test]
 fn the_overview_lists_problems_flat_and_hosts_by_urgency() {
-    let host = |id: &str, customer: Option<&str>| HostEntry {
-        id: id.into(),
-        customer: customer.map(String::from),
-        ..HostEntry::default()
-    };
+    let host = |id: &str| HostEntry { id: id.into(), ..HostEntry::default() };
     let cfg = ServerConfig {
-        customers: vec![Customer { id: "acme".into(), name: "Acme".into() }],
-        hosts: vec![host("a", Some("acme")), host("b", None), host("c", None), host("d", None)],
+        hosts: vec![host("a"), host("b"), host("c"), host("d")],
         ..ServerConfig::default()
     };
     let rows = [row("a", 0), row("b", 0), row("c", 0)];
@@ -232,9 +227,6 @@ fn the_overview_lists_problems_flat_and_hosts_by_urgency() {
         (1, 1),
         "info listed, not counted"
     );
-    assert_eq!(o.customers.len(), 1, "older views still get their grouping");
-    let acme: Vec<&str> = o.customers[0].hosts.iter().map(|h| h.id.as_str()).collect();
-    assert_eq!(acme, ["a"]);
 }
 
 #[test]
