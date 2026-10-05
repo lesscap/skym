@@ -27,3 +27,5 @@ curl -fsS -H "Authorization: Bearer $SKYM_TOKEN" "$SKYM_URL/api/overview"
 On a monitored host itself, `skym status --json` and `skym exceptions` give the same view without the server, in more detail.
 
 Answer with what is wrong, since when, the likely cause, and what to look at next. Say so when everything is fine.
+
+Running on a schedule to watch on your own, rather than answering? Read [watching.md](watching.md).
