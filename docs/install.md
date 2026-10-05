@@ -1,10 +1,11 @@
 # Installation
 
-Two parts: `skym-server` on a machine you control, and `skym` on every monitored host. Both are static Linux binaries (x86_64 or aarch64, musl), built with:
+Two parts: `skym-server` on a machine you control, and `skym` on every monitored host; optionally `skym-notify` beside the server. All are static Linux binaries (x86_64 or aarch64, musl), built with:
 
 ```sh
 cargo zigbuild --release -p skym-agent  --target x86_64-unknown-linux-musl
 cargo zigbuild --release -p skym-server --target x86_64-unknown-linux-musl
+cargo zigbuild --release -p skym-notify --target x86_64-unknown-linux-musl
 ```
 
 ## Server
@@ -101,6 +102,25 @@ skym-view --server https://skym.example.com
 ```
 
 `~/.config/skym/env` holds `KEY=VALUE` lines (`SKYM_URL=…`, `SKYM_TOKEN=<reader token>`); keep it mode 0600. Press `?` in the view for its keys.
+
+## Notifications
+
+`skym-notify` reads the server's API like any reader and tells a Feishu group when a critical or warn incident opens, gets critical, or resolves. Hygiene (info) and muted incidents are never sent. An incident counts as resolved once it has been gone for 10 minutes, so one that flaps says nothing.
+
+1. In the Feishu group, add a custom bot. As its security setting, choose a signature (keep the secret) or the keyword `skym`.
+2. Optionally, create a check on healthchecks.io with a period of 1 minute and a grace of 5 minutes. `skym-notify` pings it while it can read the server, so the check alerts when the server, its machine or `skym-notify` stops; and it pings `/fail` once Feishu has refused messages for 10 minutes.
+3. Add a reader token for it to `server.toml` and restart the server.
+4. Write `notify.toml` from [`deploy/notify.example.toml`](../deploy/notify.example.toml), mode 0600.
+5. Run it beside the server, for example as a container built from [`deploy/Dockerfile.notify`](../deploy/Dockerfile.notify), on a network where it reaches the server by name. `server = "http://skym:7280"` in the example assumes a server container named `skym` on the same user-defined network (a compose project, or `docker network create skym` and `--name skym --network skym` for the server):
+
+   ```sh
+   docker build -t skym-notify -f deploy/Dockerfile.notify <dir holding the binary>
+   docker run -d --restart unless-stopped --network skym \
+     -v $PWD/notify.toml:/etc/skym-notify/notify.toml:ro -v skym-notify:/var/lib/skym-notify \
+     -v /etc/ssl/certs:/etc/ssl/certs:ro skym-notify
+   ```
+
+On its first start it announces every incident open at the time.
 
 ## Upgrading
 

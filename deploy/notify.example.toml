@@ -1,0 +1,19 @@
+# skym-notify configuration: /etc/skym-notify/notify.toml. It holds secrets: keep it mode 0600.
+
+# The server, as this container reaches it (here: by its service name on the compose network).
+server = "http://skym:7280"
+# A reader token of its own (a [[readers]] entry in server.toml).
+token = "<reader token>"
+# What was announced; on a volume, so a restart announces nothing twice.
+state = "/var/lib/skym-notify/state.json"
+
+# A custom bot of the Feishu group. With a keyword as its security setting, use "skym":
+# every message starts with it.
+[feishu]
+webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/<token>"
+secret = "<signing secret>"   # when the bot's security setting is a signature
+
+# Optional: pinged every minute while skym can be read; /fail once Feishu has refused
+# messages for 10 minutes.
+[healthchecks]
+ping_url = "https://hc-ping.com/<uuid>"
