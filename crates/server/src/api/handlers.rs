@@ -78,14 +78,15 @@ pub async fn overview(State(s): State<AppState>) -> ApiResult<Overview> {
     let snap = Snapshot::read(&s).await?;
     let open = snap.views(&s, &snap.open);
     let apps = snap.apps(&s, &open);
-    Ok(Json(views::overview(&s.cfg, &snap.hosts, &apps, &open, snap.now)))
+    Ok(Json(views::overview(&s.cfg, &snap.hosts, &apps, &snap.workloads, &open, snap.now)))
 }
 
 pub async fn hosts(State(s): State<AppState>) -> ApiResult<HostList> {
     let snap = Snapshot::read(&s).await?;
     let open = snap.views(&s, &snap.open);
     let apps = snap.apps(&s, &open);
-    Ok(Json(HostList { hosts: views::hosts(&s.cfg, &snap.hosts, &apps, &open, snap.now) }))
+    let hosts = views::hosts(&s.cfg, &snap.hosts, &apps, &snap.workloads, &open, snap.now);
+    Ok(Json(HostList { hosts }))
 }
 
 pub async fn host(State(s): State<AppState>, Path(host): Path<String>) -> ApiResult<HostView> {

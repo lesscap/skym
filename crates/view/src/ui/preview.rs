@@ -100,6 +100,19 @@ fn top(
     (!parts.is_empty()).then(|| Line::from(vec![label(name, theme), Span::raw(parts.join(" · "))]))
 }
 
+/// `other    0.80 cores · 1.2G beyond the workloads`: what runs outside them, when known.
+fn other(h: &HostOverview, theme: Theme) -> Option<Line<'static>> {
+    let parts: Vec<String> =
+        [h.other_cpu_cores.map(|c| format!("{} cores", cores(c))), h.other_memory_bytes.map(size)]
+            .into_iter()
+            .flatten()
+            .collect();
+    (!parts.is_empty()).then(|| {
+        let text = format!("{} beyond the workloads", parts.join(" · "));
+        Line::from(vec![label("other", theme), Span::raw(text)])
+    })
+}
+
 /// `tags     acme · billing`, when it has any.
 fn tags(tags: &[String], theme: Theme) -> Option<Line<'static>> {
     (!tags.is_empty()).then(|| Line::from(vec![label("tags", theme), Span::raw(tags.join(" · "))]))
@@ -324,6 +337,7 @@ pub fn host_body(app: &App, h: &HostOverview, now: Timestamp, theme: Theme) -> V
     lines.extend(top("top mem", &on_host, memory, |b| size(b as u64), theme));
     let cpu = |a: &AppSummary| apps::used_cpu(a).map(f64::from);
     lines.extend(top("top cpu", &on_host, cpu, |c| cores(c as f32), theme));
+    lines.extend(other(h, theme));
     lines
 }
 

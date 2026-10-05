@@ -204,6 +204,15 @@ pub struct HostOverview {
     pub net_rx_bytes_per_s: Option<u64>,
     #[serde(default)]
     pub net_tx_bytes_per_s: Option<u64>,
+    /// What the host uses beyond the workloads its latest report listed (other processes,
+    /// the kernel): busy CPUs and memory less what its running workloads report, never below
+    /// zero. A workload without a reading counts as none; CPU is `None` while the host has no
+    /// rate yet. Memory is a lower bound: page cache charged to workloads (all of it, for
+    /// systemd units) is not in the host's used memory.
+    #[serde(default)]
+    pub other_cpu_cores: Option<f32>,
+    #[serde(default)]
+    pub other_memory_bytes: Option<u64>,
     /// From the configuration, sorted.
     #[serde(default)]
     pub tags: Vec<String>,
