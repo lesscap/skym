@@ -67,11 +67,13 @@ pub struct Mute {
 
 /// A URL the server probes, one of an application's. `expect` replaces the default "below
 /// 400" when set; `headers` may hold a token, so their values never leave the configuration.
+/// `json_equals` checks the body of an expected answer: JSON Pointer → scalar.
 #[derive(Debug, Clone)]
 pub struct Endpoint {
     pub url: String,
     pub expect: Vec<u16>,
     pub headers: Headers,
+    pub json_equals: BTreeMap<String, serde_json::Value>,
     pub app: AppKey,
 }
 
@@ -116,6 +118,8 @@ pub struct AppProbe {
     pub expect: Vec<u16>,
     #[serde(default)]
     pub headers: Headers,
+    #[serde(default)]
+    pub json_equals: BTreeMap<String, serde_json::Value>,
 }
 
 /// A listed application with nothing but its id and environment, for tests.
@@ -141,6 +145,7 @@ impl ServerConfig {
                     url: p.url.clone(),
                     expect: p.expect.clone(),
                     headers: p.headers.clone(),
+                    json_equals: p.json_equals.clone(),
                     app: a.id.clone(),
                 })
             })
@@ -259,6 +264,14 @@ fn validate_endpoint(e: &Endpoint) -> anyhow::Result<reqwest::Url> {
     if let Some(s) = e.expect.iter().find(|s| !(100..=599).contains(*s)) {
         bail!("endpoint {} expects {s}, which is not an HTTP status", e.url);
     }
+    for (pointer, value) in &e.json_equals {
+        if !pointer.starts_with('/') {
+            bail!("endpoint {}: json_equals key {pointer:?} is not a JSON Pointer", e.url);
+        }
+        if value.is_array() || value.is_object() {
+            bail!("endpoint {}: json_equals {pointer} must be a string, number or boolean", e.url);
+        }
+    }
     for (name, value) in e.headers.iter() {
         HeaderName::from_bytes(name.as_bytes())
             .with_context(|| format!("endpoint {}: header name {name:?}", e.url))?;
@@ -358,6 +371,16 @@ mod tests {
             (probed[0].expect.as_slice(), probed[0].headers["Authorization"].as_str()),
             ([401].as_slice(), "Bearer s3cret")
         );
+        let health = parse(&probe(
+            "url = \"https://shop.example.com/api/health\"\n\
+             json_equals = { \"/success\" = true, \"/data/database\" = \"connected\" }",
+        ))
+        .unwrap();
+        let checks = &health.probed()[0].json_equals;
+        assert_eq!(
+            (checks["/success"].as_bool(), checks["/data/database"].as_str()),
+            (Some(true), Some("connected"))
+        );
         let shown = format!("{cfg:?}");
         assert!(shown.contains("Authorization") && !shown.contains("s3cret"), "{shown}");
     }
@@ -417,6 +440,8 @@ mod tests {
             probe("url = \"https://shop.example.com/\"\nexpect = [99]"),
             probe("url = \"https://shop.example.com/\"\nexpect = [600]"),
             probe("url = \"https://shop.example.com/\"\nheaders = { \"Bad Name\" = \"x\" }"),
+            probe("url = \"https://shop.example.com/\"\njson_equals = { success = true }"),
+            probe("url = \"https://shop.example.com/\"\njson_equals = { \"/a\" = [1] }"),
             probe("url = \"https://shop.example.com/\"\nheaders = { X-Token = \"a\\nb\" }"),
             probe(
                 "url = \"https://a.example\"\n[[apps]]\nid = \"x/blog\"\n[[apps.probes]]\nurl = \"https://a.example/\"",

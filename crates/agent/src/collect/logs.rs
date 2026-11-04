@@ -1,12 +1,14 @@
 //! Container logs → exception groups.
 
 use super::split;
+use crate::config::DockerConfig;
 use crate::exceptions::{Detail, Grouper, LogLine, Stream};
 use bollard::Docker;
 use bollard::container::LogOutput;
 use bollard::query_parameters::LogsOptions;
 use futures_util::{StreamExt, stream};
 use jiff::Timestamp;
+use serde::Deserialize;
 use skym_core::model::ExceptionGroup;
 use skym_core::subject::WorkloadKey;
 use std::collections::BTreeMap;
@@ -35,9 +37,13 @@ pub async fn read(
     docker: &Docker,
     targets: &[(WorkloadKey, String, Timestamp)],
     detail: Detail,
+    cfg: &DockerConfig,
 ) -> Read {
+    let ignored_hosts = |key: &WorkloadKey| {
+        cfg.workload(&key.project, &key.service).map_or(&[][..], |w| &w.ignore_caddy_hosts)
+    };
     let results: Vec<Result<OneRead, String>> = stream::iter(targets)
-        .map(|(key, id, after)| read_one(docker, key, id, *after, detail))
+        .map(|(key, id, after)| read_one(docker, key, id, *after, detail, ignored_hosts(key)))
         .buffer_unordered(8)
         .collect()
         .await;
@@ -52,11 +58,12 @@ async fn read_one(
     id: &str,
     after: Timestamp,
     detail: Detail,
+    ignored_hosts: &[String],
 ) -> Result<OneRead, String> {
     let label = format!("logs {}/{}", key.project, key.service);
     for tail in ATTEMPTS {
-        if let Ok(result) = timeout(DEADLINE, read_tail(docker, key, id, after, detail, tail)).await
-        {
+        let read = read_tail(docker, key, id, after, detail, tail, ignored_hosts);
+        if let Ok(result) = timeout(DEADLINE, read).await {
             return result.map_err(|e| format!("{label}: {e}"));
         }
     }
@@ -70,6 +77,7 @@ async fn read_tail(
     after: Timestamp,
     detail: Detail,
     tail: &str,
+    ignored_hosts: &[String],
 ) -> Result<OneRead, bollard::errors::Error> {
     let mut frames = docker.logs(id, Some(options(after, tail)));
     let mut grouper = Grouper::new(key.clone(), detail);
@@ -79,7 +87,9 @@ async fn read_tail(
     let mut feed = |stream, lines: Vec<(Timestamp, String)>| {
         for (ts, text) in lines.iter().filter(|(ts, _)| *ts > after) {
             last = last.max(Some(*ts));
-            grouper.push(LogLine { ts: *ts, stream, text });
+            if !ignored_caddy_request(text, ignored_hosts) {
+                grouper.push(LogLine { ts: *ts, stream, text });
+            }
         }
     };
     while let Some(frame) = frames.next().await {
@@ -95,6 +105,44 @@ async fn read_tail(
     }
     // A line without its newline yet is still being written: it is read whole next time.
     Ok((grouper.finish(), last.map(|t| (key.clone(), t))))
+}
+
+#[derive(Deserialize)]
+struct CaddyLine {
+    level: String,
+    logger: String,
+    request: Option<CaddyRequest>,
+}
+
+#[derive(Deserialize)]
+struct CaddyRequest {
+    host: String,
+}
+
+/// A Caddy request error (`http.log.error`) for one of `hosts`, whatever the case and port.
+/// Anything else, Caddy's own errors and lines that are not its JSON included, is kept.
+fn ignored_caddy_request(line: &str, hosts: &[String]) -> bool {
+    if hosts.is_empty() || !line.trim_start().starts_with('{') {
+        return false;
+    }
+    let Ok(l) = serde_json::from_str::<CaddyLine>(line) else { return false };
+    let host = l.request.as_ref().map(|r| without_port(&r.host));
+    l.level == "error"
+        && l.logger == "http.log.error"
+        && host.is_some_and(|h| hosts.iter().any(|ignored| ignored.eq_ignore_ascii_case(h)))
+}
+
+/// `example.com:443` → `example.com`, `[::1]:443` → `[::1]`; a bare IPv6 address is kept.
+fn without_port(host: &str) -> &str {
+    match host.rsplit_once(':') {
+        Some((name, port))
+            if port.bytes().all(|b| b.is_ascii_digit())
+                && (name.ends_with(']') || !name.contains(':')) =>
+        {
+            name
+        }
+        _ => host,
+    }
 }
 
 /// Both streams, each line prefixed with its timestamp (needed to reassemble lines).
@@ -166,6 +214,28 @@ mod tests {
         let o = options(Timestamp::from_second(1_790_000_000).unwrap(), "20000");
         assert!(o.stdout && o.stderr && o.timestamps && !o.follow);
         assert_eq!((o.since, o.tail.as_str()), (1_790_000_000, "20000"));
+    }
+
+    #[test]
+    fn only_request_errors_of_the_ignored_hosts_are_dropped() {
+        let hosts = ["tee.fmap.ai".to_string(), "in.qijun.io".to_string()];
+        let line = |level: &str, logger: &str, host: &str| {
+            format!(
+                r#"{{"level":"{level}","ts":1.5,"logger":"{logger}","msg":"dial tcp: connection refused","request":{{"host":"{host}","uri":"/"}},"status":502}}"#
+            )
+        };
+        let ignored = |text: &str| ignored_caddy_request(text, &hosts);
+        assert!(ignored(&line("error", "http.log.error", "tee.fmap.ai")));
+        assert!(ignored(&line("error", "http.log.error", "IN.qijun.io:443")), "case and port");
+        assert!(!ignored(&line("error", "http.log.error", "qijun.io")), "a kept site still counts");
+        assert!(!ignored(&line("error", "tls.obtain", "tee.fmap.ai")), "only request errors");
+        assert!(!ignored(&line("warn", "http.log.error", "tee.fmap.ai")));
+        assert!(!ignored(r#"{"level":"error","logger":"http.log.error","msg":"no request"}"#));
+        assert!(!ignored("tee.fmap.ai error: not JSON"));
+        assert!(!ignored_caddy_request(&line("error", "http.log.error", "tee.fmap.ai"), &[]));
+        assert_eq!(without_port("[::1]:443"), "[::1]");
+        assert_eq!(without_port("[::1]"), "[::1]");
+        assert_eq!(without_port("::1"), "::1");
     }
 
     #[test]

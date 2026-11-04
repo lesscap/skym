@@ -2,7 +2,7 @@
 //! applications gone missing.
 
 use crate::config::AppConfig;
-use crate::probe::Probe;
+use crate::probe::{Probe, expected};
 use jiff::{SignedDuration, Timestamp};
 use skym_core::report::Report;
 use skym_core::rules::{Finding, IncidentCode, Severity};
@@ -81,8 +81,8 @@ pub fn projection(
     matched.then(|| (if full_in < day { Severity::Critical } else { Severity::Warn }, full_in))
 }
 
-/// What one probe says: an endpoint down or answering otherwise than expected, and a
-/// certificate close to its expiry.
+/// What one probe says: an endpoint down, answering otherwise than expected or with a body
+/// that fails its checks, and a certificate close to its expiry.
 pub fn endpoint(url: &str, expect: &[u16], p: &Probe) -> Vec<Finding> {
     let finding = |code, (severity, detail)| Finding {
         subject: Subject::Endpoint(url.to_string()),
@@ -92,7 +92,10 @@ pub fn endpoint(url: &str, expect: &[u16], p: &Probe) -> Vec<Finding> {
     };
     let down = match &p.response {
         Err(why) => Some((Severity::Critical, why.clone())),
-        Ok(status) => answer(*status, expect),
+        Ok(status) => answer(*status, expect).or_else(|| {
+            let why = p.body_error.as_ref()?;
+            Some((Severity::Critical, format!("{}, but {why}", status_text(*status))))
+        }),
     };
     let cert = p.cert_not_after.and_then(|t| expiring(t, p.at));
     down.map(|d| finding(IncidentCode::EndpointDown, d))
@@ -103,18 +106,22 @@ pub fn endpoint(url: &str, expect: &[u16], p: &Probe) -> Vec<Finding> {
 
 /// `None` when the status is the one expected (by default, anything below 400).
 fn answer(status: u16, expect: &[u16]) -> Option<(Severity, String)> {
-    let good = if expect.is_empty() { status < 400 } else { expect.contains(&status) };
-    if good {
+    if expected(status, expect) {
         return None;
     }
-    let reason = reqwest::StatusCode::from_u16(status).ok().and_then(|s| s.canonical_reason());
-    let mut detail = reason.map_or_else(|| status.to_string(), |r| format!("{status} {r}"));
+    let mut detail = status_text(status);
     if !expect.is_empty() {
         let expected: Vec<String> = expect.iter().map(u16::to_string).collect();
         detail = format!("{detail}, expected {}", expected.join(" or "));
     }
     let severity = if status >= 500 { Severity::Critical } else { Severity::Warn };
     Some((severity, detail))
+}
+
+/// `200 OK`, or the bare number without a known reason.
+fn status_text(status: u16) -> String {
+    let reason = reqwest::StatusCode::from_u16(status).ok().and_then(|s| s.canonical_reason());
+    reason.map_or_else(|| status.to_string(), |r| format!("{status} {r}"))
 }
 
 fn expiring(not_after: Timestamp, now: Timestamp) -> Option<(Severity, String)> {
@@ -281,6 +288,7 @@ mod tests {
             response: response.map_err(str::to_string),
             latency_ms: 40,
             cert_not_after: cert_in_days.map(|d| at(d * 86_400)),
+            body_error: None,
         }
     }
 
@@ -318,6 +326,29 @@ mod tests {
             [(IncidentCode::EndpointDown, Severity::Warn, "200 OK, expected 401 or 403".into())]
         );
         assert_eq!(judged(&[401], &probe(Ok(503), None))[0].1, Severity::Critical);
+    }
+
+    #[test]
+    fn an_expected_answer_with_a_failing_body_is_down_and_its_certificate_still_judged() {
+        let p = Probe {
+            body_error: Some("/data/database is not the expected value".into()),
+            ..probe(Ok(200), Some(3))
+        };
+        let found = judged(&[200], &p);
+        assert_eq!(
+            found[0],
+            (
+                IncidentCode::EndpointDown,
+                Severity::Critical,
+                "200 OK, but /data/database is not the expected value".into()
+            )
+        );
+        assert_eq!(
+            found.iter().map(|f| f.0).collect::<Vec<_>>()[1..],
+            [IncidentCode::CertExpiring]
+        );
+        let unexpected = Probe { body_error: p.body_error.clone(), ..probe(Ok(503), None) };
+        assert_eq!(judged(&[200], &unexpected)[0].2, "503 Service Unavailable, expected 200");
     }
 
     #[test]

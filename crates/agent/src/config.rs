@@ -3,6 +3,8 @@
 use anyhow::Context;
 use jiff::SignedDuration;
 use serde::Deserialize;
+use skym_core::model::DatastoreKind;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_PATH: &str = "/etc/skym/config.toml";
@@ -40,12 +42,47 @@ pub struct DockerConfig {
     pub enabled: bool,
     pub socket: PathBuf,
     pub exclude: Vec<String>,
+    pub blue_green: Vec<BlueGreen>,
+    pub workloads: Vec<WorkloadConfig>,
 }
 
 impl Default for DockerConfig {
     fn default() -> Self {
-        DockerConfig { enabled: true, socket: "/var/run/docker.sock".into(), exclude: Vec::new() }
+        DockerConfig {
+            enabled: true,
+            socket: "/var/run/docker.sock".into(),
+            exclude: Vec::new(),
+            blue_green: Vec::new(),
+            workloads: Vec::new(),
+        }
     }
+}
+
+impl DockerConfig {
+    pub fn workload(&self, project: &str, service: &str) -> Option<&WorkloadConfig> {
+        self.workloads.iter().find(|w| w.project == project && w.service == service)
+    }
+}
+
+/// Two compose projects taking turns to run `services`: one of them may be stopped while
+/// the other runs it.
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct BlueGreen {
+    pub projects: Vec<String>,
+    pub services: Vec<String>,
+}
+
+/// What skym cannot tell of one workload by itself.
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct WorkloadConfig {
+    pub project: String,
+    pub service: String,
+    /// The engine of a datastore whose image skym does not recognise.
+    #[serde(default)]
+    pub datastore: Option<DatastoreKind>,
+    /// Caddy request errors for these hosts are not exceptions (retired sites).
+    #[serde(default)]
+    pub ignore_caddy_hosts: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -75,7 +112,43 @@ fn parse(text: &str) -> anyhow::Result<Config> {
         anyhow::bail!("[[systemd]] unit {:?} is declared twice", dup.unit);
     }
     anyhow::ensure!(cfg.interval.is_positive(), "interval must be positive");
+    validate_docker(&cfg.docker)?;
     Ok(cfg)
+}
+
+fn validate_docker(d: &DockerConfig) -> anyhow::Result<()> {
+    let mut paired = BTreeSet::new();
+    for pair in &d.blue_green {
+        let [a, b] = pair.projects.as_slice() else {
+            anyhow::bail!("[[docker.blue_green]] needs exactly two projects: {:?}", pair.projects);
+        };
+        anyhow::ensure!(
+            !a.is_empty() && !b.is_empty() && a != b,
+            "[[docker.blue_green]] projects must be two different names: {:?}",
+            pair.projects
+        );
+        anyhow::ensure!(
+            !pair.services.is_empty() && pair.services.iter().all(|s| !s.is_empty()),
+            "[[docker.blue_green]] of {:?} needs its services",
+            pair.projects
+        );
+        let services = pair.projects.iter().flat_map(|p| pair.services.iter().map(move |s| (p, s)));
+        if let Some((p, s)) = services.into_iter().find(|k| !paired.insert(*k)) {
+            anyhow::bail!("{p}/{s} is in more than one [[docker.blue_green]]");
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for w in &d.workloads {
+        let at = format!("[[docker.workloads]] {}/{}", w.project, w.service);
+        anyhow::ensure!(
+            !w.project.is_empty() && !w.service.is_empty(),
+            "{at}: project and service are required"
+        );
+        anyhow::ensure!(seen.insert((&w.project, &w.service)), "{at} is declared twice");
+        anyhow::ensure!(w.datastore != Some(DatastoreKind::Unknown), "{at}: unknown datastore");
+        anyhow::ensure!(w.ignore_caddy_hosts.iter().all(|h| !h.is_empty()), "{at}: empty host");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -120,5 +193,49 @@ mod tests {
         let twice = "[[systemd]]\nunit = \"xray\"\n[[systemd]]\nunit = \"xray\"\n";
         assert!(parse(twice).unwrap_err().to_string().contains("declared twice"));
         assert!(parse("interval = \"0s\"").is_err());
+    }
+
+    #[test]
+    fn blue_green_pairs_and_workload_overrides() {
+        let cfg = parse(
+            r#"
+            [[docker.blue_green]]
+            projects = ["shop", "shop-green"]
+            services = ["web", "edge"]
+
+            [[docker.workloads]]
+            project = "infra"
+            service = "database"
+            datastore = "postgres"
+
+            [[docker.workloads]]
+            project = "i"
+            service = "caddy"
+            ignore_caddy_hosts = ["old.example.com"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.docker.blue_green[0].projects, ["shop", "shop-green"]);
+        let db = cfg.docker.workload("infra", "database").unwrap();
+        assert_eq!(db.datastore, Some(DatastoreKind::Postgres));
+        assert_eq!(
+            cfg.docker.workload("i", "caddy").unwrap().ignore_caddy_hosts,
+            ["old.example.com"]
+        );
+        assert!(cfg.docker.workload("i", "database").is_none());
+        let rejected = [
+            "[[docker.blue_green]]\nprojects = [\"a\"]\nservices = [\"web\"]",
+            "[[docker.blue_green]]\nprojects = [\"a\", \"a\"]\nservices = [\"web\"]",
+            "[[docker.blue_green]]\nprojects = [\"a\", \"b\"]\nservices = []",
+            "[[docker.blue_green]]\nprojects = [\"a\", \"b\"]\nservices = [\"web\"]\n\
+             [[docker.blue_green]]\nprojects = [\"a\", \"c\"]\nservices = [\"web\"]",
+            "[[docker.workloads]]\nproject = \"a\"\nservice = \"db\"\n\
+             [[docker.workloads]]\nproject = \"a\"\nservice = \"db\"",
+            "[[docker.workloads]]\nproject = \"a\"\nservice = \"db\"\ndatastore = \"oracle\"",
+            "[[docker.workloads]]\nproject = \"\"\nservice = \"db\"",
+        ];
+        for text in rejected {
+            assert!(parse(text).is_err(), "accepted: {text}");
+        }
     }
 }

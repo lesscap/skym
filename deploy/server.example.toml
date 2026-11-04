@@ -26,6 +26,12 @@ tags = ["billing"]              # besides its host's: this one is tagged acme an
 url = "https://shop.example.com/healthz"
 headers = { Authorization = "Bearer <probe token>" }
 
+# A health answer whose body must say so too: JSON Pointer = string, number or boolean.
+[[apps.probes]]
+url = "https://shop.example.com/api/health"
+expect = [200]
+json_equals = { "/success" = true, "/data/database" = "connected" }
+
 # A page that answers 401 without a token is up when it does.
 [[apps.probes]]
 url = "https://admin.example.com/"

@@ -198,6 +198,8 @@ pub fn state_of(
             .filter(|_| health == Some(Health::Unhealthy))
             .and_then(|h| h.log.as_ref()?.last()?.output.as_deref())
             .map(|o| truncate(redact(o.trim()), 200)),
+        // Decided against the whole listing, see `standby::mark`.
+        stop_allowed: false,
     }
 }
 

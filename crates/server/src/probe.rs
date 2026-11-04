@@ -1,10 +1,12 @@
 //! Probing configured URLs from the server: one GET each, its status or why there was none,
-//! and when the certificate it was served with expires.
+//! when the certificate it was served with expires, and whether the body says what it should.
 
 use crate::config::Endpoint;
 use jiff::Timestamp;
 use reqwest::header::HeaderValue;
 use reqwest::redirect::{Attempt, Policy};
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
@@ -20,11 +22,21 @@ pub struct Probe {
     pub latency_ms: u64,
     /// When the certificate of the answering connection expires (https only).
     pub cert_not_after: Option<Timestamp>,
+    /// Why an expected answer's body fails the endpoint's `json_equals`. Judged in the pass
+    /// that saw it and not stored: the incident's detail carries it.
+    pub body_error: Option<String>,
+}
+
+/// Whether a status is the answer expected: one in `expect`, by default anything below 400.
+pub fn expected(status: u16, expect: &[u16]) -> bool {
+    if expect.is_empty() { status < 400 } else { expect.contains(&status) }
 }
 
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REDIRECTS: usize = 5;
 const CONCURRENCY: usize = 8;
+/// A health answer is small; a bigger body is not one, and is not read further.
+const MAX_BODY: usize = 64 * 1024;
 
 pub struct Prober {
     client: reqwest::Client,
@@ -58,20 +70,56 @@ impl Prober {
         let sent = request.send().await;
         let latency_ms = started.elapsed().as_millis() as u64;
         match sent {
-            Ok(r) => Probe {
-                at,
-                response: Ok(r.status().as_u16()),
-                latency_ms,
-                cert_not_after: r
+            Ok(r) => {
+                let status = r.status().as_u16();
+                let cert_not_after = r
                     .extensions()
                     .get::<reqwest::tls::TlsInfo>()
                     .and_then(|t| t.peer_certificate())
-                    .and_then(not_after),
+                    .and_then(not_after);
+                let checked = !e.json_equals.is_empty() && expected(status, &e.expect);
+                let body_error = match checked {
+                    true => self.body_error(r, &e.json_equals).await,
+                    false => None,
+                };
+                Probe { at, response: Ok(status), latency_ms, cert_not_after, body_error }
+            }
+            Err(e) => Probe {
+                at,
+                response: Err(self.reason(&e)),
+                latency_ms,
+                cert_not_after: None,
+                body_error: None,
             },
-            Err(e) => {
-                Probe { at, response: Err(self.reason(&e)), latency_ms, cert_not_after: None }
+        }
+    }
+
+    /// The body, read up to `MAX_BODY` within the client's timeout, against the checks. Says
+    /// which check failed, never what the body holds.
+    async fn body_error(
+        &self,
+        mut r: reqwest::Response,
+        checks: &BTreeMap<String, Value>,
+    ) -> Option<String> {
+        let mut body = Vec::new();
+        loop {
+            match r.chunk().await {
+                Ok(Some(c)) if body.len() + c.len() > MAX_BODY => {
+                    return Some(format!("body larger than {} KiB", MAX_BODY / 1024));
+                }
+                Ok(Some(c)) => body.extend_from_slice(&c),
+                Ok(None) => break,
+                Err(e) => return Some(format!("reading the body: {}", self.reason(&e))),
             }
         }
+        let Ok(json) = serde_json::from_slice::<Value>(&body) else {
+            return Some("body is not JSON".into());
+        };
+        checks.iter().find_map(|(pointer, want)| match json.pointer(pointer) {
+            None => Some(format!("{pointer} is missing")),
+            Some(got) if got != want => Some(format!("{pointer} is not the expected value")),
+            Some(_) => None,
+        })
     }
 
     /// Every endpoint with its probe, a few at a time. A probe that fails to run is left out

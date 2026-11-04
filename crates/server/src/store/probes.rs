@@ -41,6 +41,7 @@ pub fn all(c: &Connection) -> rusqlite::Result<Vec<ProbeRow>> {
                 response: status.ok_or(error.unwrap_or_default()),
                 latency_ms: r.get::<_, i64>(5)? as u64,
                 cert_not_after: r.get::<_, Option<String>>(6)?.map(parsed).transpose()?,
+                body_error: None,
             },
         })
     })?;

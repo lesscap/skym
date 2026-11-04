@@ -90,6 +90,7 @@ fn workload(
         cpu_cores: None,
         health_failing_streak: None,
         health_output: None,
+        stop_allowed: false,
     };
     (key, facts, state)
 }
