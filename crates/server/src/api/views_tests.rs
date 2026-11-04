@@ -37,6 +37,7 @@ fn probe(url: &str, app: &str) -> Endpoint {
         url: url.into(),
         expect: vec![],
         headers: Headers::default(),
+        json_equals: Default::default(),
         app: app.parse().unwrap(),
     }
 }
@@ -315,6 +316,7 @@ fn an_endpoint_says_how_it_answered_unless_its_probes_stopped() {
             response,
             latency_ms: 120,
             cert_not_after: Some(at(60 * 24 * 30)),
+            body_error: None,
         },
     };
     let interval = SignedDuration::from_secs(60);

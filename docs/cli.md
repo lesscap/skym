@@ -61,10 +61,26 @@ enabled = true                       # false if the host owner does not grant Do
 socket = "/var/run/docker.sock"
 exclude = ["noisy-container"]
 
+[[docker.blue_green]]                # two compose projects taking turns (blue/green releases)
+projects = ["shop", "shop-green"]
+services = ["web", "edge"]           # a stopped one is a standby while the other project runs it
+
+[[docker.workloads]]                 # what skym cannot tell of one workload by itself
+project = "infra"
+service = "database"
+datastore = "postgres"               # postgres, redis or mysql: a datastore image skym does not recognise
+
+[[docker.workloads]]
+project = "proxy"
+service = "caddy"
+ignore_caddy_hosts = ["retired.example.com"]   # Caddy request errors for these hosts are not exceptions
+
 [[systemd]]                          # one entry per service that does not run in Docker
 unit = "xray"
 ports = [443]                        # optional: ports that must be listening
 ```
+
+A stopped service of a `blue_green` pair is not `WORKLOAD_DOWN` while the other project runs the same service, judged only from a pass that listed every container; if both are stopped, both are down. Services not listed, and other projects, are judged as usual. A configured `datastore` makes the workload a datastore with the usual protocol probe. `ignore_caddy_hosts` drops only Caddy's `http.log.error` lines at level `error` whose request host (any case, port ignored) is listed; Caddy's own errors and every other host still count. The configuration is rejected when a pair does not name two different projects or any service, a service is in two pairs, a workload is declared twice, or a `datastore` is unknown.
 
 `skym agent` and `skym doctor` also need:
 

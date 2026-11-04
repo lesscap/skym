@@ -182,6 +182,10 @@ pub struct WorkloadState {
     pub health_failing_streak: Option<u32>,
     #[serde(default)]
     pub health_output: Option<String>,
+    /// Stopped while the other project of its blue/green pair runs the same service: a
+    /// standby, not a workload down.
+    #[serde(default)]
+    pub stop_allowed: bool,
 }
 
 impl WorkloadState {

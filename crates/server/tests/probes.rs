@@ -23,6 +23,7 @@ fn endpoint(url: &str, headers: &[(&str, &str)]) -> Endpoint {
         url: url.into(),
         expect: vec![],
         headers: Headers(headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()),
+        json_equals: BTreeMap::new(),
         app: "x/shop".parse().unwrap(),
     }
 }
@@ -36,6 +37,13 @@ async fn serve() -> (String, Arc<AtomicUsize>) {
     let hits = elsewhere.clone();
     let app = Router::new()
         .route("/ok", get(|| async { "ok" }))
+        .route(
+            "/health/{database}",
+            get(|Path(database): Path<String>| async move {
+                axum::Json(serde_json::json!({"success": true, "data": {"database": database}}))
+            }),
+        )
+        .route("/big", get(|| async { format!("\"{}\"", "x".repeat(70 * 1024)) }))
         .route("/down", get(|| async { StatusCode::SERVICE_UNAVAILABLE }))
         .route(
             "/token",
@@ -102,6 +110,37 @@ async fn probes_see_statuses_headers_timeouts_and_refusals() {
 }
 
 #[tokio::test]
+async fn an_expected_answer_is_checked_by_its_body() {
+    let (base, _) = serve().await;
+    let prober = Prober::new(Duration::from_secs(2)).unwrap();
+    let probe = async |path: &str, checks: &[(&str, serde_json::Value)]| {
+        let e = Endpoint {
+            json_equals: checks.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+            expect: vec![200],
+            ..endpoint(&format!("{base}{path}"), &[])
+        };
+        let p = prober.probe(&e).await;
+        (p.response, p.body_error)
+    };
+    let healthy = [("/success", true.into()), ("/data/database", "connected".into())];
+    assert_eq!(probe("/health/connected", &healthy).await, (Ok(200), None));
+    assert_eq!(
+        probe("/health/disconnected", &healthy).await,
+        (Ok(200), Some("/data/database is not the expected value".into())),
+        "the status stays what it was; the body's value is never repeated"
+    );
+    let missing = [("/data/version", "1".into())];
+    assert_eq!(
+        probe("/health/connected", &missing).await.1,
+        Some("/data/version is missing".into())
+    );
+    assert_eq!(probe("/ok", &healthy).await.1, Some("body is not JSON".into()));
+    assert_eq!(probe("/big", &healthy).await.1, Some("body larger than 64 KiB".into()));
+    assert_eq!(probe("/down", &healthy).await, (Ok(503), None), "an unexpected status is enough");
+    assert_eq!(probe("/ok", &[]).await, (Ok(200), None), "without checks the body is not read");
+}
+
+#[tokio::test]
 async fn a_token_never_follows_a_redirect_to_another_origin() {
     let (base, _) = serve().await;
     let (other, elsewhere) = serve().await;
@@ -137,6 +176,7 @@ fn answered(status: Result<u16, &str>, at: Timestamp, cert_days: Option<i64>) ->
         response: status.map_err(str::to_string),
         latency_ms: 30,
         cert_not_after: cert_days.map(|d| at + SignedDuration::from_hours(24 * d)),
+        body_error: None,
     }
 }
 

@@ -80,6 +80,18 @@ fn workload_down() {
 }
 
 #[test]
+fn a_standby_may_be_stopped() {
+    let mut r = base();
+    (r.workloads[APP].state.run, r.workloads[APP].state.exit_code) = (RunState::Exited, Some(1));
+    assert_eq!(
+        severity_of(&r, &Ctx::default(), IncidentCode::WorkloadDown),
+        Some(Severity::Critical)
+    );
+    r.workloads[APP].state.stop_allowed = true;
+    assert_eq!(severity_of(&r, &Ctx::default(), IncidentCode::WorkloadDown), None);
+}
+
+#[test]
 fn a_stopped_workload_says_since_when_and_why_it_stays_down() {
     let detail = |r: &Report| {
         findings(r, &Ctx::default())

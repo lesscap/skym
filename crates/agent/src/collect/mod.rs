@@ -8,9 +8,10 @@ mod docker;
 mod events;
 pub mod host;
 mod logs;
+mod standby;
 mod systemd;
 
-use crate::config::Config;
+use crate::config::{Config, DockerConfig};
 use crate::exceptions::Detail;
 use bollard::Docker;
 use bollard::models::ContainerInspectResponse;
@@ -20,7 +21,7 @@ use futures_util::future::join_all;
 use jiff::Timestamp;
 use skym_core::model::{
     DatastoreKind, ExceptionGroup, HostFacts, HostState, LocalEvent, RunState, TransientCounts,
-    WorkloadFacts, WorkloadState,
+    WorkloadFacts, WorkloadKind, WorkloadState,
 };
 use skym_core::subject::WorkloadKey;
 use std::collections::BTreeMap;
@@ -203,8 +204,10 @@ async fn from_docker(
     let (chosen, transient) = winners(host, &inspects);
     let oom_exits: Vec<(WorkloadKey, Timestamp)> =
         chosen.iter().filter_map(|(key, i)| Some((key.clone(), oom_exit(i)?))).collect();
-    let workloads: Vec<_> =
-        chosen.into_iter().map(|(key, i)| (workload(key, i, &mut restarts), i)).collect();
+    let workloads: Vec<_> = chosen
+        .into_iter()
+        .map(|(key, i)| (workload(key, i, &mut restarts, &cfg.docker), i))
+        .collect();
     let probed = join_all(workloads.into_iter().map(probe)).await;
     let targets: Vec<(WorkloadKey, String, Timestamp)> = probed
         .iter()
@@ -214,7 +217,7 @@ async fn from_docker(
             (wl.key.clone(), id.clone(), after)
         })
         .collect();
-    let read = logs::read(d, &targets, w.detail).await;
+    let read = logs::read(d, &targets, w.detail, &cfg.docker).await;
     errors.extend(read.errors);
     // A running container's CPU counter; its id and start tell its runs apart.
     let cpu_targets = probed
@@ -226,8 +229,9 @@ async fn from_docker(
             Some(host::Target { key: wl.key.clone(), instance: format!("{id} {started}"), cpu })
         })
         .collect();
+    let workloads = probed.into_iter().map(|(wl, _)| wl).collect();
     Ok(DockerOutput {
-        workloads: probed.into_iter().map(|(wl, _)| wl).collect(),
+        workloads: standby::mark(&cfg.docker.blue_green, complete, workloads),
         transient,
         ooms: ooms(&events, &oom_exits, w.events_since),
         exceptions: read.groups,
@@ -244,16 +248,25 @@ fn oom_exit(i: &ContainerInspectResponse) -> Option<Timestamp> {
     timestamp(state.finished_at.as_deref()?)
 }
 
-/// The chosen container's facts and state, with its crash restarts and memory use.
+/// The chosen container's facts and state, with its crash restarts and memory use. A
+/// configured datastore engine overrides what the image name says.
 fn workload(
     key: WorkloadKey,
     i: &ContainerInspectResponse,
     restarts: &mut BTreeMap<WorkloadKey, Vec<Timestamp>>,
+    cfg: &DockerConfig,
 ) -> Workload {
     let running = i.state.as_ref().and_then(|s| s.running) == Some(true);
     let memory = i.id.as_deref().filter(|_| running).and_then(cgroup::container_memory);
     let state = state_of(i, restarts.remove(&key).unwrap_or_default(), memory);
-    Workload { key, facts: facts_of(i), state }
+    let facts = facts_of(i);
+    let facts = match cfg.workload(&key.project, &key.service).and_then(|w| w.datastore) {
+        Some(engine) => {
+            WorkloadFacts { kind: WorkloadKind::Datastore, datastore: Some(engine), ..facts }
+        }
+        None => facts,
+    };
+    Workload { key, facts, state }
 }
 
 /// Datastores get a protocol probe; returns the workload with its container id.

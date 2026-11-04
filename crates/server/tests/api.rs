@@ -442,6 +442,7 @@ async fn applications_are_listed_described_and_missed() {
             url: "https://shop.example.com/".into(),
             expect: vec![],
             headers: Headers([("Authorization".to_string(), "Bearer s3cret".to_string())].into()),
+            json_equals: Default::default(),
         }],
         ..app_config("x/shop", Some("prod"))
     };
@@ -482,6 +483,7 @@ async fn applications_are_listed_described_and_missed() {
             response: Ok(503),
             latency_ms: 40,
             cert_not_after: None,
+            body_error: None,
         };
         let (endpoints, pass) = (probed.clone(), vec![(probed[0].clone(), probe)]);
         state.store.call(move |c| probes_once(c, &endpoints, &pass, at)).await.unwrap();

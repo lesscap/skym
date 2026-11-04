@@ -80,6 +80,9 @@ fn down(
     facts: Option<&WorkloadFacts>,
     now: Timestamp,
 ) -> Option<Finding> {
+    if state.stop_allowed {
+        return None;
+    }
     let not_running = match (state.run, state.exit_code) {
         (RunState::Running | RunState::Unknown, _) | (RunState::Exited, Some(0)) => None,
         (RunState::Exited, Some(code)) => Some(format!("exited ({code})")),

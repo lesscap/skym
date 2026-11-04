@@ -8,6 +8,20 @@ interval = "60s"
 enabled = true
 exclude = []
 
+# [[docker.blue_green]]              # blue/green releases: a stopped slot is a standby
+# projects = ["shop", "shop-green"]  # while the other project runs the same service
+# services = ["web", "edge"]
+
+# [[docker.workloads]]               # a datastore image skym does not recognise
+# project = "infra"
+# service = "database"
+# datastore = "postgres"
+
+# [[docker.workloads]]               # Caddy request errors of retired sites are not exceptions
+# project = "proxy"
+# service = "caddy"
+# ignore_caddy_hosts = ["retired.example.com"]
+
 # [[systemd]]                        # services that do not run in Docker
 # unit = "xray"
 # ports = [443]
