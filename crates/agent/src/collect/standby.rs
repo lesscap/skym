@@ -44,7 +44,7 @@ mod tests {
     fn workload(project: &str, service: &str, run: RunState) -> Workload {
         let mut w = skym_core::fixtures::full_report().workloads[0].clone();
         w.key =
-            WorkloadKey { host: "yi1".into(), project: project.into(), service: service.into() };
+            WorkloadKey { host: "web-1".into(), project: project.into(), service: service.into() };
         w.state.run = run;
         Workload { key: w.key, facts: w.facts.unwrap(), state: w.state }
     }

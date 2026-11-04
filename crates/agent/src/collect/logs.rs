@@ -218,21 +218,30 @@ mod tests {
 
     #[test]
     fn only_request_errors_of_the_ignored_hosts_are_dropped() {
-        let hosts = ["tee.fmap.ai".to_string(), "in.qijun.io".to_string()];
+        let hosts = ["retired.example.com".to_string(), "old.example.org".to_string()];
         let line = |level: &str, logger: &str, host: &str| {
             format!(
                 r#"{{"level":"{level}","ts":1.5,"logger":"{logger}","msg":"dial tcp: connection refused","request":{{"host":"{host}","uri":"/"}},"status":502}}"#
             )
         };
         let ignored = |text: &str| ignored_caddy_request(text, &hosts);
-        assert!(ignored(&line("error", "http.log.error", "tee.fmap.ai")));
-        assert!(ignored(&line("error", "http.log.error", "IN.qijun.io:443")), "case and port");
-        assert!(!ignored(&line("error", "http.log.error", "qijun.io")), "a kept site still counts");
-        assert!(!ignored(&line("error", "tls.obtain", "tee.fmap.ai")), "only request errors");
-        assert!(!ignored(&line("warn", "http.log.error", "tee.fmap.ai")));
+        assert!(ignored(&line("error", "http.log.error", "retired.example.com")));
+        assert!(ignored(&line("error", "http.log.error", "OLD.example.org:443")), "case and port");
+        assert!(
+            !ignored(&line("error", "http.log.error", "example.com")),
+            "a kept site still counts"
+        );
+        assert!(
+            !ignored(&line("error", "tls.obtain", "retired.example.com")),
+            "only request errors"
+        );
+        assert!(!ignored(&line("warn", "http.log.error", "retired.example.com")));
         assert!(!ignored(r#"{"level":"error","logger":"http.log.error","msg":"no request"}"#));
-        assert!(!ignored("tee.fmap.ai error: not JSON"));
-        assert!(!ignored_caddy_request(&line("error", "http.log.error", "tee.fmap.ai"), &[]));
+        assert!(!ignored("retired.example.com error: not JSON"));
+        assert!(!ignored_caddy_request(
+            &line("error", "http.log.error", "retired.example.com"),
+            &[]
+        ));
         assert_eq!(without_port("[::1]:443"), "[::1]");
         assert_eq!(without_port("[::1]"), "[::1]");
         assert_eq!(without_port("::1"), "::1");
